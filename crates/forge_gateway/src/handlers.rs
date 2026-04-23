@@ -14,10 +14,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::auth::TokenAuthExt;
+use crate::monitoring::{HealthCheckResponse, MonitoringService};
 
 /// Health check endpoint
 pub async fn health() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(json!({"status": "healthy"})))
+}
+
+/// Metrics endpoint
+pub async fn metrics(monitoring: web::Data<MonitoringService>) -> Result<HttpResponse> {
+    let metrics = monitoring.get_metrics().await;
+
+    let response = HealthCheckResponse {
+        status: "healthy".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_seconds: metrics.uptime_seconds,
+        metrics,
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 /// Request structure for conversation
@@ -43,14 +58,21 @@ pub async fn conversation(
     let _token_id = req.token_id();
     let request = payload.into_inner();
 
-    // For now, return a placeholder response
-    // In a real implementation, this would use forge_api::API::chat()
-    let response = ConversationResponse {
-        response: format!("Received message: {}", request.message),
-        conversation_id: request.conversation_id.unwrap_or_else(|| "default".to_string()),
-    };
-
-    Ok(HttpResponse::Ok().json(response))
+    // Use the actual ForgeCode API chat functionality
+    match api.chat(&request.message, request.conversation_id.as_deref()).await {
+        Ok(response) => {
+            let conversation_response = ConversationResponse {
+                response: response.text,
+                conversation_id: response.conversation_id.unwrap_or_else(|| "default".to_string()),
+            };
+            Ok(HttpResponse::Ok().json(conversation_response))
+        }
+        Err(e) => {
+            log::error!("Failed to process conversation: {}", e);
+            Ok(HttpResponse::InternalServerError()
+                .json(json!({"error": "Failed to process conversation"})))
+        }
+    }
 }
 
 /// Response structure for file listing
@@ -101,15 +123,26 @@ pub struct FileContentResponse {
 pub async fn get_file(api: web::Data<API>, path: web::Path<String>) -> Result<HttpResponse> {
     let file_path = path.into_inner();
 
-    // For now, return a placeholder response
-    // In a real implementation, this would read the actual file content
-    let response = FileContentResponse {
-        path: file_path.clone(),
-        content: "File content placeholder".to_string(),
-        exists: true,
-    };
-
-    Ok(HttpResponse::Ok().json(response))
+    // Use the actual ForgeCode API to read file content
+    match api.read_file(&file_path).await {
+        Ok(content) => {
+            let response = FileContentResponse {
+                path: file_path,
+                content,
+                exists: true,
+            };
+            Ok(HttpResponse::Ok().json(response))
+        }
+        Err(e) => {
+            log::error!("Failed to read file {}: {}", file_path, e);
+            let response = FileContentResponse {
+                path: file_path,
+                content: String::new(),
+                exists: false,
+            };
+            Ok(HttpResponse::Ok().json(response))
+        }
+    }
 }
 
 /// Request structure for file update
@@ -135,18 +168,26 @@ pub async fn update_file(
     let file_path = path.into_inner();
     let update_request = payload.into_inner();
 
-    // For now, return a placeholder response
-    // In a real implementation, this would write the actual file content
-    let response = FileUpdateResponse {
-        path: file_path,
-        success: true,
-        message: format!(
-            "File updated with {} characters",
-            update_request.content.len()
-        ),
-    };
-
-    Ok(HttpResponse::Ok().json(response))
+    // Use the actual ForgeCode API to write file content
+    match api.write_file(&file_path, &update_request.content).await {
+        Ok(()) => {
+            let response = FileUpdateResponse {
+                path: file_path,
+                success: true,
+                message: format!("File updated with {} characters", update_request.content.len()),
+            };
+            Ok(HttpResponse::Ok().json(response))
+        }
+        Err(e) => {
+            log::error!("Failed to update file {}: {}", file_path, e);
+            let response = FileUpdateResponse {
+                path: file_path,
+                success: false,
+                message: format!("Failed to update file: {}", e),
+            };
+            Ok(HttpResponse::InternalServerError().json(response))
+        }
+    }
 }
 
 /// Request structure for command execution

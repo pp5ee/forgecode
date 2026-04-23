@@ -12,6 +12,7 @@ use forge_services::UrlTokenService;
 
 use crate::auth::{PublicWithOptionalAuth, UrlTokenAuth};
 use crate::handlers;
+use crate::monitoring::MonitoringService;
 use crate::websocket::WebSocketHandler;
 
 /// Configuration for the gateway server
@@ -90,6 +91,7 @@ pub struct GatewayServer<R: UrlTokenRepository> {
     config: ForgeConfig,
     server_config: ServerConfig,
     token_service: Arc<UrlTokenService<R>>,
+    monitoring_service: Arc<MonitoringService>,
     shutdown_signal: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -101,12 +103,14 @@ impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
         token_service: Arc<UrlTokenService<R>>,
     ) -> Self {
         let server_config = ServerConfig::from_env_and_config(&config);
+        let monitoring_service = Arc::new(MonitoringService::new());
 
         Self {
             api,
             config,
             server_config,
             token_service,
+            monitoring_service,
             shutdown_signal: None,
         }
     }
@@ -117,8 +121,13 @@ impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
         let config = self.config.clone();
         let server_config = self.server_config.clone();
         let token_service = self.token_service.clone();
+        let monitoring_service = self.monitoring_service.clone();
 
         let bind_address = server_config.bind_address();
+
+        // Initialize monitoring and logging
+        crate::monitoring::init_logging();
+        monitoring_service.log_startup();
 
         log::info!("Starting gateway server on {}", bind_address);
         log::info!("Server configuration: {:?}", server_config);
@@ -142,8 +151,11 @@ impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
                 .app_data(web::Data::new(api.clone()))
                 .app_data(web::Data::new(config.clone()))
                 .app_data(web::Data::from(token_service.clone()))
+                .app_data(web::Data::new(monitoring_service.clone()))
                 // Public health endpoint (no auth required)
                 .service(web::resource("/api/health").route(web::get().to(handlers::health)))
+                // Public metrics endpoint (no auth required)
+                .service(web::resource("/api/metrics").route(web::get().to(handlers::metrics)))
                 // Token management endpoints (public with optional auth)
                 .service(
                     web::scope("/api/tokens")
@@ -189,6 +201,7 @@ impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
         let server = server.run();
 
         let graceful = server.handle();
+        let monitoring_service_shutdown = monitoring_service.clone();
         tokio::spawn(async move {
             let _ = shutdown_rx.await;
             graceful.stop(true).await;
@@ -196,6 +209,7 @@ impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
 
         server.await?;
 
+        monitoring_service_shutdown.log_shutdown();
         log::info!("Gateway server stopped");
         Ok(())
     }
