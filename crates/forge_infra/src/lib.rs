@@ -17,6 +17,7 @@ mod kv_storage;
 mod mcp_client;
 mod mcp_server;
 mod url_token;
+mod url_token_fs;
 mod walker;
 
 pub use auth::*;
@@ -28,3 +29,4 @@ pub use http::sanitize_headers;
 pub use kv_storage::CacacheStorage;
 pub use mcp_client::*;
 pub use url_token::*;
+pub use url_token_fs::FsUrlTokenRepository;
