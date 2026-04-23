@@ -1,256 +1,156 @@
-//! HTTP server implementation for the web gateway
+//! HTTP server implementation for the ForgeCode gateway
 
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use actix_cors::Cors;
-use actix_web::{middleware::Logger, web, App, HttpServer};
+use actix_web::{App, HttpServer, middleware, web};
 use forge_api::API;
 use forge_config::ForgeConfig;
-use forge_infra::UrlTokenRepository;
+use forge_domain::UrlTokenRepository;
 use forge_services::UrlTokenService;
 
-use crate::auth::{PublicWithOptionalAuth, UrlTokenAuth};
-use crate::handlers;
-use crate::monitoring::MonitoringService;
-use crate::rate_limiting::{RateLimitStore, RateLimitMiddleware, RateLimitConfig};
-use crate::websocket::WebSocketHandler;
+use crate::handlers::{chat_stream, get_file, health_check, list_files, update_file};
 
 /// Configuration for the gateway server
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ServerConfig {
-    pub port: u16,
-    pub bind_address: String,
-    pub workers: usize,
-    pub client_timeout: Duration,
-    pub client_shutdown: Duration,
-    pub token_storage_path: Option<std::path::PathBuf>,
+    /// Host to bind the server to
+    host: String,
+    /// Port to listen on
+    port: u16,
+    /// Base directory for token storage
+    token_storage_base: PathBuf,
+}
+
+impl ServerConfig {
+    /// Create a new server configuration
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            token_storage_base: PathBuf::from(".forge"),
+        }
+    }
+
+    /// Get the server bind address
+    pub fn bind_address(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+
+    /// Get the token storage path
+    pub fn token_storage_path(&self) -> PathBuf {
+        self.token_storage_base.join("tokens")
+    }
+
+    /// Set the token storage base directory
+    pub fn with_token_storage_base(mut self, base: PathBuf) -> Self {
+        self.token_storage_base = base;
+        self
+    }
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            host: "127.0.0.1".to_string(),
             port: 8080,
-            bind_address: "0.0.0.0".to_string(),
-            workers: num_cpus::get(),
-            client_timeout: Duration::from_secs(60),
-            client_shutdown: Duration::from_secs(30),
-            token_storage_path: None,
+            token_storage_base: PathBuf::from(".forge"),
         }
     }
 }
 
-impl ServerConfig {
-    /// Create server config from environment variables and forge config
-    pub fn from_env_and_config(config: &ForgeConfig) -> Self {
-        let port = std::env::var("FORGE_GATEWAY_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .or_else(|| config.gateway_port)
-            .unwrap_or(8080);
-
-        let bind_address = std::env::var("FORGE_GATEWAY_BIND")
-            .unwrap_or_else(|_| "0.0.0.0".to_string());
-
-        let workers = std::env::var("FORGE_GATEWAY_WORKERS")
-            .ok()
-            .and_then(|w| w.parse().ok())
-            .unwrap_or_else(num_cpus::get);
-
-        let token_storage_path = std::env::var("FORGE_GATEWAY_TOKEN_STORAGE")
-            .ok()
-            .map(std::path::PathBuf::from);
-
-        Self {
-            port,
-            bind_address,
-            workers,
-            token_storage_path,
-            ..Default::default()
-        }
-    }
-
-    /// Get the full bind address
-    pub fn bind_address(&self) -> String {
-        format!("{}:{}", self.bind_address, self.port)
-    }
-
-    /// Get the token storage path with default fallback
-    pub fn token_storage_path(&self) -> std::path::PathBuf {
-        self.token_storage_path
-            .clone()
-            .unwrap_or_else(|| {
-                let cwd = std::env::current_dir().unwrap_or_default();
-                cwd.join(".forge").join("gateway_tokens.json")
-            })
-    }
-}
-
-/// HTTP server for the web gateway
+/// The gateway HTTP server
 pub struct GatewayServer<R: UrlTokenRepository> {
+    config: ServerConfig,
     api: Arc<API>,
-    config: ForgeConfig,
-    server_config: ServerConfig,
     token_service: Arc<UrlTokenService<R>>,
-    monitoring_service: Arc<MonitoringService>,
-    shutdown_signal: Option<tokio::sync::oneshot::Sender<()>>,
+    server_handle: Option<actix_web::dev::ServerHandle>,
 }
 
-impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
+impl<R: UrlTokenRepository + Send + Sync + 'static> GatewayServer<R> {
     /// Create a new gateway server
     pub fn new(
         api: Arc<API>,
         config: ForgeConfig,
         token_service: Arc<UrlTokenService<R>>,
     ) -> Self {
-        let server_config = ServerConfig::from_env_and_config(&config);
-        let monitoring_service = Arc::new(MonitoringService::new());
+        let server_config = ServerConfig::default();
 
         Self {
+            config: server_config,
             api,
-            config,
-            server_config,
             token_service,
-            monitoring_service,
-            shutdown_signal: None,
+            server_handle: None,
         }
     }
 
-    /// Create a new gateway server with rate limiting
-    pub fn new_with_rate_limiting(
-        api: Arc<API>,
-        config: ForgeConfig,
-        token_service: Arc<UrlTokenService<R>>,
-        rate_limit_config: RateLimitConfig,
-    ) -> Self {
-        let server_config = ServerConfig::from_env_and_config(&config);
-        let monitoring_service = Arc::new(MonitoringService::new());
-
-        // Create rate limiting store
-        let rate_limit_store = Arc::new(RateLimitStore::new(rate_limit_config));
-
-        Self {
-            api,
-            config,
-            server_config,
-            token_service,
-            monitoring_service,
-            shutdown_signal: None,
-        }
+    /// Get the server configuration
+    pub fn config(&self) -> &ServerConfig {
+        &self.config
     }
 
-    /// Start the HTTP server
-    pub async fn start(&mut self) -> Result<(), anyhow::Error> {
+    /// Start the gateway server
+    pub async fn start(&mut self) -> anyhow::Result<()> {
         let api = self.api.clone();
-        let config = self.config.clone();
-        let server_config = self.server_config.clone();
         let token_service = self.token_service.clone();
-        let monitoring_service = self.monitoring_service.clone();
+        let config = self.config.clone();
 
-        let bind_address = server_config.bind_address();
-
-        // Initialize monitoring and logging
-        crate::monitoring::init_logging();
-        monitoring_service.log_startup();
-
-        log::info!("Starting gateway server on {}", bind_address);
-        log::info!("Server configuration: {:?}", server_config);
-
-        // Create shutdown channel
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        self.shutdown_signal = Some(shutdown_tx);
+        log::info!(
+            "Starting server on {}:{}",
+            self.config.host,
+            self.config.port
+        );
 
         let server = HttpServer::new(move || {
-            // Configure CORS
             let cors = Cors::default()
                 .allow_any_origin()
                 .allow_any_method()
                 .allow_any_header()
-                .max_age(3600);
+                .supports_credentials();
 
             App::new()
-                // Add logging middleware
-                .wrap(Logger::default())
+                .wrap(middleware::Logger::default())
                 .wrap(cors)
                 .app_data(web::Data::new(api.clone()))
-                .app_data(web::Data::new(config.clone()))
-                .app_data(web::Data::from(token_service.clone()))
-                .app_data(web::Data::new(monitoring_service.clone()))
-                // Public health endpoint (no auth required)
-                .service(web::resource("/api/health").route(web::get().to(handlers::health)))
-                // Public metrics endpoint (no auth required)
-                .service(web::resource("/api/metrics").route(web::get().to(handlers::metrics)))
-                // Token management endpoints (public with optional auth)
+                .app_data(web::Data::new(token_service.clone()))
                 .service(
-                    web::scope("/api/tokens")
-                        .wrap(PublicWithOptionalAuth::new(token_service.clone()))
-                        .route("", web::post().to(handlers::create_token))
-                        .route("", web::get().to(handlers::list_tokens))
-                        .route("/{id}", web::delete().to(handlers::revoke_token)),
+                    web::resource("/health")
+                        .route(web::get().to(health_check)),
                 )
-                // Protected API routes (require valid token)
                 .service(
-                    web::scope("/api")
-                        .wrap(UrlTokenAuth::new(token_service.clone()))
-                        .route("/conversation", web::post().to(handlers::conversation))
-                        .route("/files", web::get().to(handlers::list_files))
-                        .route("/files/{path:.*}", web::get().to(handlers::get_file))
-                        .route("/files/{path:.*}", web::put().to(handlers::update_file))
-                        .route("/execute", web::post().to(handlers::execute_command)),
+                    web::resource("/api/files")
+                        .route(web::get().to(list_files)),
                 )
-                // Protected WebSocket routes (require valid token)
                 .service(
-                    web::scope("/ws")
-                        .wrap(UrlTokenAuth::new(token_service.clone()))
-                        .route(
-                            "/conversation",
-                            web::get().to(WebSocketHandler::conversation),
-                        )
-                        .route("/command", web::get().to(WebSocketHandler::command)),
+                    web::resource("/api/files/{path:.*}")
+                        .route(web::get().to(get_file))
+                        .route(web::post().to(update_file)),
                 )
-                // Public UI routes (optional auth)
                 .service(
-                    web::scope("/")
-                        .wrap(PublicWithOptionalAuth::new(token_service.clone()))
-                        .route("", web::get().to(handlers::serve_ui))
-                        .route("/{path:.*}", web::get().to(handlers::serve_ui)),
+                    web::resource("/api/chat")
+                        .route(web::post().to(chat_stream)),
                 )
         })
-        .workers(server_config.workers)
-        .client_request_timeout(server_config.client_timeout)
-        .shutdown_timeout(server_config.client_shutdown.as_secs())
-        .bind(&bind_address)?;
+        .bind(&config.bind_address())?;
 
-        // Start server with graceful shutdown handling
-        let server = server.run();
+        let handle = server.run();
+        self.server_handle = Some(handle);
 
-        let graceful = server.handle();
-        let monitoring_service_shutdown = monitoring_service.clone();
-        tokio::spawn(async move {
-            let _ = shutdown_rx.await;
-            graceful.stop(true).await;
-        });
+        log::info!(
+            "Gateway server listening on {}",
+            config.bind_address()
+        );
 
-        server.await?;
-
-        monitoring_service_shutdown.log_shutdown();
-        log::info!("Gateway server stopped");
         Ok(())
     }
 
-    /// Stop the HTTP server gracefully
-    pub async fn stop(&mut self) -> Result<(), anyhow::Error> {
-        if let Some(shutdown_tx) = self.shutdown_signal.take() {
-            log::info!("Stopping gateway server gracefully...");
-            let _ = shutdown_tx.send(());
-            // Give the server time to shut down
-            tokio::time::sleep(Duration::from_secs(5)).await;
+    /// Stop the gateway server
+    pub async fn stop(&mut self) -> anyhow::Result<()> {
+        if let Some(handle) = self.server_handle.take() {
+            handle.stop(true).await;
+            log::info!("Server stopped successfully");
         }
         Ok(())
-    }
-
-    /// Get server configuration
-    pub fn config(&self) -> &ServerConfig {
-        &self.server_config
     }
 }

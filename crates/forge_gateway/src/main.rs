@@ -1,9 +1,9 @@
 //! ForgeCode Gateway Binary Entry Point
 
-use forge_gateway::Gateway;
+use std::sync::Arc;
+
 use forge_api::API;
 use forge_config::ForgeConfig;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,12 +27,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?);
 
     // Create and start gateway
-    let mut gateway = Gateway::new(api, config);
+    let mut gateway = forge_gateway::Gateway::new(api, config).await
+        .map_err(|e| {
+            log::error!("Failed to create gateway: {}", e);
+            e
+        })?;
 
     // Generate a sample token for development
-    let sample_token = gateway.generate_token();
-    log::info!("Sample token for testing: {}", sample_token);
-    log::info!("Gateway URL: http://localhost:8080/?token={}", sample_token);
+    match gateway.generate_token(24, Some("Development token".to_string())).await {
+        Ok(sample_token) => {
+            log::info!("Sample token for testing: {}", sample_token);
+            log::info!("Gateway URL: http://localhost:8080/?token={}", sample_token);
+        }
+        Err(e) => {
+            log::error!("Failed to generate sample token: {}", e);
+        }
+    }
 
     // Start the gateway server
     gateway.start().await

@@ -6,7 +6,7 @@ use actix_web::{web, HttpResponse, Result};
 use forge_api::API;
 use forge_config::ForgeConfig;
 use forge_domain::{
-    CreateUrlTokenRequest, CreateUrlTokenResponse, File, UrlToken, UrlTokenId,
+    ChatRequest, CreateUrlTokenRequest, CreateUrlTokenResponse, Event, EventValue, UrlToken, UrlTokenId,
 };
 use forge_infra::UrlTokenRepository;
 use forge_services::UrlTokenService;
@@ -15,6 +15,7 @@ use serde_json::json;
 
 use crate::auth::TokenAuthExt;
 use crate::monitoring::{HealthCheckResponse, MonitoringService};
+use forge_stream::StreamExt;
 
 /// Health check endpoint
 pub async fn health() -> Result<HttpResponse> {
@@ -58,12 +59,37 @@ pub async fn conversation(
     let _token_id = req.token_id();
     let request = payload.into_inner();
 
+    // Create the chat request with proper Event
+    let event = Event::new(EventValue::text(request.message));
+    let conversation_id = request.conversation_id
+        .map(forge_domain::ConversationId::new)
+        .unwrap_or_default();
+    let chat_request = ChatRequest::new(event, conversation_id.clone());
+
     // Use the actual ForgeCode API chat functionality
-    match api.chat(&request.message, request.conversation_id.as_deref()).await {
-        Ok(response) => {
+    match api.chat(chat_request).await {
+        Ok(mut stream) => {
+            // Collect all responses from the stream
+            let mut responses = Vec::new();
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(response) => responses.push(response),
+                    Err(e) => {
+                        log::error!("Stream error: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            // Combine all text responses
+            let combined_text: String = responses.iter()
+                .filter_map(|r| r.message.as_ref().map(|m| m.content.clone()))
+                .collect::<Vec<_>>()
+                .join("");
+
             let conversation_response = ConversationResponse {
-                response: response.text,
-                conversation_id: response.conversation_id.unwrap_or_else(|| "default".to_string()),
+                response: combined_text,
+                conversation_id: conversation_id.to_string(),
             };
             Ok(HttpResponse::Ok().json(conversation_response))
         }
@@ -78,12 +104,12 @@ pub async fn conversation(
 /// Response structure for file listing
 #[derive(Debug, Serialize)]
 pub struct FileListResponse {
-    pub files: Vec<FileInfo>,
+    pub files: Vec<FileListItem>,
 }
 
-/// File information structure
+/// File information structure for listing
 #[derive(Debug, Serialize)]
-pub struct FileInfo {
+pub struct FileListItem {
     pub path: String,
     pub is_dir: bool,
 }
@@ -92,15 +118,15 @@ pub struct FileInfo {
 pub async fn list_files(api: web::Data<API>) -> Result<HttpResponse> {
     match api.discover().await {
         Ok(files) => {
-            let file_info: Vec<FileInfo> = files
+            let file_items: Vec<FileListItem> = files
                 .into_iter()
-                .map(|file| FileInfo {
+                .map(|file| FileListItem {
                     path: file.path,
                     is_dir: file.is_dir,
                 })
                 .collect();
 
-            let response = FileListResponse { files: file_info };
+            let response = FileListResponse { files: file_items };
             Ok(HttpResponse::Ok().json(response))
         }
         Err(e) => {
@@ -122,9 +148,11 @@ pub struct FileContentResponse {
 /// Get file content
 pub async fn get_file(api: web::Data<API>, path: web::Path<String>) -> Result<HttpResponse> {
     let file_path = path.into_inner();
+    let cwd = api.environment().cwd.clone();
+    let full_path = cwd.join(&file_path);
 
-    // Use the actual ForgeCode API to read file content
-    match api.read_file(&file_path).await {
+    // Use forge_fs to read file content
+    match forge_fs::ForgeFS::read_utf8(&full_path).await {
         Ok(content) => {
             let response = FileContentResponse {
                 path: file_path,
@@ -167,9 +195,11 @@ pub async fn update_file(
 ) -> Result<HttpResponse> {
     let file_path = path.into_inner();
     let update_request = payload.into_inner();
+    let cwd = api.environment().cwd.clone();
+    let full_path = cwd.join(&file_path);
 
-    // Use the actual ForgeCode API to write file content
-    match api.write_file(&file_path, &update_request.content).await {
+    // Use forge_fs to write file content
+    match forge_fs::ForgeFS::write(&full_path, update_request.content.as_bytes()).await {
         Ok(()) => {
             let response = FileUpdateResponse {
                 path: file_path,

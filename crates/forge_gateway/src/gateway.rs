@@ -1,39 +1,49 @@
 //! Main gateway module that orchestrates the web gateway functionality
 
-use crate::server::{GatewayServer, ServerConfig};
-use crate::auth::TokenManager;
+use std::sync::Arc;
+
 use forge_api::API;
 use forge_config::ForgeConfig;
-use std::sync::Arc;
+use forge_infra::FsUrlTokenRepository;
+use forge_services::UrlTokenService;
+
+use crate::server::{GatewayServer, ServerConfig};
 
 /// Main gateway struct that manages the web gateway service
 pub struct Gateway {
-    server: Option<GatewayServer>,
-    token_manager: TokenManager,
+    server: Option<GatewayServer<FsUrlTokenRepository>>,
     api: Arc<API>,
     config: ForgeConfig,
+    token_service: Arc<UrlTokenService<FsUrlTokenRepository>>,
 }
 
 impl Gateway {
     /// Create a new gateway instance
-    pub fn new(api: Arc<API>, config: ForgeConfig) -> Self {
-        let token_manager = TokenManager::new();
+    pub async fn new(api: Arc<API>, config: ForgeConfig) -> anyhow::Result<Self> {
+        // Initialize token repository with default storage path
+        let storage_path = ServerConfig::default().token_storage_path();
+        let repository = FsUrlTokenRepository::new(storage_path).await?;
+        let token_service = Arc::new(UrlTokenService::new(Arc::new(repository)));
 
-        Self {
+        Ok(Self {
             server: None,
-            token_manager,
             api,
             config,
-        }
+            token_service,
+        })
     }
 
     /// Start the gateway server
-    pub async fn start(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn start(&mut self) -> anyhow::Result<()> {
         if self.server.is_some() {
             return Err(anyhow::anyhow!("Server is already running"));
         }
 
-        let mut server = GatewayServer::new(self.api.clone(), self.config.clone());
+        let mut server = GatewayServer::new(
+            self.api.clone(),
+            self.config.clone(),
+            self.token_service.clone(),
+        );
 
         log::info!("Starting ForgeCode gateway...");
         log::info!("Server configuration: {:?}", server.config());
@@ -46,7 +56,7 @@ impl Gateway {
     }
 
     /// Stop the gateway server
-    pub async fn stop(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn stop(&mut self) -> anyhow::Result<()> {
         if let Some(mut server) = self.server.take() {
             log::info!("Stopping ForgeCode gateway...");
             server.stop().await?;
@@ -56,13 +66,23 @@ impl Gateway {
     }
 
     /// Generate a new authentication token
-    pub fn generate_token(&self) -> String {
-        self.token_manager.generate_token()
+    pub async fn generate_token(&self, duration_hours: i64, description: Option<String>) -> anyhow::Result<String> {
+        use forge_domain::CreateUrlTokenRequest;
+
+        let request = CreateUrlTokenRequest::default()
+            .duration_hours(duration_hours)
+            .description(description.unwrap_or_default());
+
+        let response = self.token_service.create_token(request).await?;
+        Ok(response.token)
     }
 
     /// Validate an authentication token
-    pub fn validate_token(&self, token: &str) -> bool {
-        self.token_manager.validate_token(token)
+    pub async fn validate_token(&self, token: &str) -> bool {
+        matches!(
+            self.token_service.validate_token(token).await,
+            forge_domain::TokenValidationResult::Valid(_)
+        )
     }
 
     /// Check if the server is running
