@@ -1,14 +1,18 @@
 //! HTTP server implementation for the web gateway
 
-use crate::handlers;
-use crate::auth::TokenAuth;
-use crate::websocket::WebSocketHandler;
-use forge_api::API;
-use forge_config::ForgeConfig;
-use actix_web::{web, App, HttpServer, middleware::Logger};
-use actix_cors::Cors;
 use std::sync::Arc;
 use std::time::Duration;
+
+use actix_cors::Cors;
+use actix_web::{middleware::Logger, web, App, HttpServer};
+use forge_api::API;
+use forge_config::ForgeConfig;
+use forge_infra::UrlTokenRepository;
+use forge_services::UrlTokenService;
+
+use crate::auth::{PublicWithOptionalAuth, UrlTokenAuth};
+use crate::handlers;
+use crate::websocket::WebSocketHandler;
 
 /// Configuration for the gateway server
 #[derive(Debug, Clone)]
@@ -18,6 +22,7 @@ pub struct ServerConfig {
     pub workers: usize,
     pub client_timeout: Duration,
     pub client_shutdown: Duration,
+    pub token_storage_path: Option<std::path::PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -28,6 +33,7 @@ impl Default for ServerConfig {
             workers: num_cpus::get(),
             client_timeout: Duration::from_secs(60),
             client_shutdown: Duration::from_secs(30),
+            token_storage_path: None,
         }
     }
 }
@@ -49,10 +55,15 @@ impl ServerConfig {
             .and_then(|w| w.parse().ok())
             .unwrap_or_else(num_cpus::get);
 
+        let token_storage_path = std::env::var("FORGE_GATEWAY_TOKEN_STORAGE")
+            .ok()
+            .map(std::path::PathBuf::from);
+
         Self {
             port,
             bind_address,
             workers,
+            token_storage_path,
             ..Default::default()
         }
     }
@@ -61,25 +72,41 @@ impl ServerConfig {
     pub fn bind_address(&self) -> String {
         format!("{}:{}", self.bind_address, self.port)
     }
+
+    /// Get the token storage path with default fallback
+    pub fn token_storage_path(&self) -> std::path::PathBuf {
+        self.token_storage_path
+            .clone()
+            .unwrap_or_else(|| {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                cwd.join(".forge").join("gateway_tokens.json")
+            })
+    }
 }
 
 /// HTTP server for the web gateway
-pub struct GatewayServer {
+pub struct GatewayServer<R: UrlTokenRepository> {
     api: Arc<API>,
     config: ForgeConfig,
     server_config: ServerConfig,
+    token_service: Arc<UrlTokenService<R>>,
     shutdown_signal: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl GatewayServer {
+impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
     /// Create a new gateway server
-    pub fn new(api: Arc<API>, config: ForgeConfig) -> Self {
+    pub fn new(
+        api: Arc<API>,
+        config: ForgeConfig,
+        token_service: Arc<UrlTokenService<R>>,
+    ) -> Self {
         let server_config = ServerConfig::from_env_and_config(&config);
 
         Self {
             api,
             config,
             server_config,
+            token_service,
             shutdown_signal: None,
         }
     }
@@ -89,6 +116,7 @@ impl GatewayServer {
         let api = self.api.clone();
         let config = self.config.clone();
         let server_config = self.server_config.clone();
+        let token_service = self.token_service.clone();
 
         let bind_address = server_config.bind_address();
 
@@ -113,26 +141,43 @@ impl GatewayServer {
                 .wrap(cors)
                 .app_data(web::Data::new(api.clone()))
                 .app_data(web::Data::new(config.clone()))
+                .app_data(web::Data::from(token_service.clone()))
+                // Public health endpoint (no auth required)
+                .service(web::resource("/api/health").route(web::get().to(handlers::health)))
+                // Token management endpoints (public with optional auth)
+                .service(
+                    web::scope("/api/tokens")
+                        .wrap(PublicWithOptionalAuth::new(token_service.clone()))
+                        .route("", web::post().to(handlers::create_token))
+                        .route("", web::get().to(handlers::list_tokens))
+                        .route("/{id}", web::delete().to(handlers::revoke_token)),
+                )
+                // Protected API routes (require valid token)
                 .service(
                     web::scope("/api")
-                        .wrap(TokenAuth::new())
-                        .route("/health", web::get().to(handlers::health))
+                        .wrap(UrlTokenAuth::new(token_service.clone()))
                         .route("/conversation", web::post().to(handlers::conversation))
                         .route("/files", web::get().to(handlers::list_files))
                         .route("/files/{path:.*}", web::get().to(handlers::get_file))
                         .route("/files/{path:.*}", web::put().to(handlers::update_file))
-                        .route("/execute", web::post().to(handlers::execute_command))
+                        .route("/execute", web::post().to(handlers::execute_command)),
                 )
+                // Protected WebSocket routes (require valid token)
                 .service(
                     web::scope("/ws")
-                        .wrap(TokenAuth::new())
-                        .route("/conversation", web::get().to(WebSocketHandler::conversation))
-                        .route("/command", web::get().to(WebSocketHandler::command))
+                        .wrap(UrlTokenAuth::new(token_service.clone()))
+                        .route(
+                            "/conversation",
+                            web::get().to(WebSocketHandler::conversation),
+                        )
+                        .route("/command", web::get().to(WebSocketHandler::command)),
                 )
+                // Public UI routes (optional auth)
                 .service(
                     web::scope("/")
+                        .wrap(PublicWithOptionalAuth::new(token_service.clone()))
                         .route("", web::get().to(handlers::serve_ui))
-                        .route("/{path:.*}", web::get().to(handlers::serve_ui))
+                        .route("/{path:.*}", web::get().to(handlers::serve_ui)),
                 )
         })
         .workers(server_config.workers)
