@@ -1,12 +1,19 @@
 //! HTTP request handlers for the web gateway
 
+use std::path::PathBuf;
+
 use actix_web::{web, HttpResponse, Result};
 use forge_api::API;
 use forge_config::ForgeConfig;
-use forge_domain::File;
+use forge_domain::{
+    CreateUrlTokenRequest, CreateUrlTokenResponse, File, UrlToken, UrlTokenId,
+};
+use forge_infra::UrlTokenRepository;
+use forge_services::UrlTokenService;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::PathBuf;
+
+use crate::auth::TokenAuthExt;
 
 /// Health check endpoint
 pub async fn health() -> Result<HttpResponse> {
@@ -30,8 +37,10 @@ pub struct ConversationResponse {
 /// Handle conversation requests
 pub async fn conversation(
     api: web::Data<API>,
+    req: actix_web::HttpRequest,
     payload: web::Json<ConversationRequest>,
 ) -> Result<HttpResponse> {
+    let _token_id = req.token_id();
     let request = payload.into_inner();
 
     // For now, return a placeholder response
@@ -74,15 +83,10 @@ pub async fn list_files(api: web::Data<API>) -> Result<HttpResponse> {
         }
         Err(e) => {
             log::error!("Failed to list files: {}", e);
-            Ok(HttpResponse::InternalServerError().json(json!({"error": "Failed to list files"})))
+            Ok(HttpResponse::InternalServerError()
+                .json(json!({"error": "Failed to list files"})))
         }
     }
-}
-
-/// Request structure for file content
-#[derive(Debug, Deserialize)]
-pub struct FileContentRequest {
-    pub path: String,
 }
 
 /// Response structure for file content
@@ -94,10 +98,7 @@ pub struct FileContentResponse {
 }
 
 /// Get file content
-pub async fn get_file(
-    api: web::Data<API>,
-    path: web::Path<String>,
-) -> Result<HttpResponse> {
+pub async fn get_file(api: web::Data<API>, path: web::Path<String>) -> Result<HttpResponse> {
     let file_path = path.into_inner();
 
     // For now, return a placeholder response
@@ -139,7 +140,10 @@ pub async fn update_file(
     let response = FileUpdateResponse {
         path: file_path,
         success: true,
-        message: format!("File updated with {} characters", update_request.content.len()),
+        message: format!(
+            "File updated with {} characters",
+            update_request.content.len()
+        ),
     };
 
     Ok(HttpResponse::Ok().json(response))
@@ -173,7 +177,10 @@ pub async fn execute_command(
         .map(PathBuf::from)
         .unwrap_or_else(|| api.environment().cwd.clone());
 
-    match api.execute_shell_command(&command_request.command, working_dir).await {
+    match api
+        .execute_shell_command(&command_request.command, working_dir)
+        .await
+    {
         Ok(output) => {
             let response = CommandResponse {
                 output: output.stdout,
@@ -190,6 +197,96 @@ pub async fn execute_command(
                 success: false,
             };
             Ok(HttpResponse::Ok().json(response))
+        }
+    }
+}
+
+/// Create a new URL token
+pub async fn create_token<R: UrlTokenRepository>(
+    token_service: web::Data<UrlTokenService<R>>,
+    payload: web::Json<CreateUrlTokenRequest>,
+) -> Result<HttpResponse> {
+    let request = payload.into_inner();
+
+    match token_service.create_token(request).await {
+        Ok(response) => Ok(HttpResponse::Created().json(response)),
+        Err(e) => {
+            log::error!("Failed to create token: {}", e);
+            Ok(HttpResponse::InternalServerError()
+                .json(json!({"error": "Failed to create token"})))
+        }
+    }
+}
+
+/// Response for listing tokens
+#[derive(Debug, Serialize)]
+pub struct ListTokensResponse {
+    pub tokens: Vec<TokenSummary>,
+}
+
+/// Summary of a token (without the full token string)
+#[derive(Debug, Serialize)]
+pub struct TokenSummary {
+    pub id: UrlTokenId,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub description: Option<String>,
+    pub revoked: bool,
+    pub expired: bool,
+}
+
+impl From<UrlToken> for TokenSummary {
+    fn from(token: UrlToken) -> Self {
+        Self {
+            id: token.id,
+            created_at: token.created_at,
+            expires_at: token.expires_at,
+            description: token.description,
+            revoked: token.revoked,
+            expired: token.is_expired(),
+        }
+    }
+}
+
+/// List all URL tokens
+pub async fn list_tokens<R: UrlTokenRepository>(
+    token_service: web::Data<UrlTokenService<R>>,
+) -> Result<HttpResponse> {
+    match token_service.list_tokens().await {
+        Ok(tokens) => {
+            let summaries: Vec<TokenSummary> = tokens
+                .into_values()
+                .map(TokenSummary::from)
+                .collect();
+            Ok(HttpResponse::Ok().json(ListTokensResponse { tokens: summaries }))
+        }
+        Err(e) => {
+            log::error!("Failed to list tokens: {}", e);
+            Ok(HttpResponse::InternalServerError()
+                .json(json!({"error": "Failed to list tokens"})))
+        }
+    }
+}
+
+/// Revoke a URL token
+pub async fn revoke_token<R: UrlTokenRepository>(
+    token_service: web::Data<UrlTokenService<R>>,
+    path: web::Path<String>,
+) -> Result<HttpResponse> {
+    let token_id_str = path.into_inner();
+    let token_id = UrlTokenId::from(token_id_str);
+
+    match token_service.revoke_token(&token_id).await {
+        Ok(()) => Ok(HttpResponse::NoContent().finish()),
+        Err(e) => {
+            log::error!("Failed to revoke token: {}", e);
+            // Check if it's a not found error
+            if e.to_string().contains("Token not found") {
+                Ok(HttpResponse::NotFound().json(json!({"error": "Token not found"})))
+            } else {
+                Ok(HttpResponse::InternalServerError()
+                    .json(json!({"error": "Failed to revoke token"})))
+            }
         }
     }
 }
@@ -212,6 +309,8 @@ pub async fn serve_ui() -> Result<HttpResponse> {
             .status.error { background: #f8d7da; color: #721c24; }
             .api-status { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
             .api-endpoint { margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 4px; }
+            .auth-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+            .token-example { background: #f8f9fa; padding: 10px; border-radius: 4px; font-family: monospace; }
         </style>
     </head>
     <body>
@@ -223,31 +322,44 @@ pub async fn serve_ui() -> Result<HttpResponse> {
             <div class="status healthy">
                 Gateway is running. Web UI implementation in progress.
             </div>
+            <div class="auth-section">
+                <h3>Authentication</h3>
+                <p>This gateway uses URL tokens for authentication. Tokens can be provided:</p>
+                <ul>
+                    <li>As a query parameter: <code>?token=your_token_here</code></li>
+                    <li>In the Authorization header: <code>Bearer your_token_here</code></li>
+                </ul>
+                <div class="token-example">
+                    POST /api/tokens - Create a new token<br>
+                    GET /api/tokens - List all tokens<br>
+                    DELETE /api/tokens/{id} - Revoke a token
+                </div>
+            </div>
             <div class="api-status">
-                <h3>API Endpoints</h3>
+                <h3>Protected API Endpoints</h3>
                 <div class="api-endpoint">
-                    <strong>GET /api/health</strong> - Health check
+                    <strong>GET /api/health</strong> - Health check (public)
                 </div>
                 <div class="api-endpoint">
-                    <strong>POST /api/conversation</strong> - AI conversation
+                    <strong>POST /api/conversation</strong> - AI conversation (protected)
                 </div>
                 <div class="api-endpoint">
-                    <strong>GET /api/files</strong> - List files in workspace
+                    <strong>GET /api/files</strong> - List files in workspace (protected)
                 </div>
                 <div class="api-endpoint">
-                    <strong>GET /api/files/{path}</strong> - Get file content
+                    <strong>GET /api/files/{path}</strong> - Get file content (protected)
                 </div>
                 <div class="api-endpoint">
-                    <strong>PUT /api/files/{path}</strong> - Update file content
+                    <strong>PUT /api/files/{path}</strong> - Update file content (protected)
                 </div>
                 <div class="api-endpoint">
-                    <strong>POST /api/execute</strong> - Execute shell command
+                    <strong>POST /api/execute</strong> - Execute shell command (protected)
                 </div>
                 <div class="api-endpoint">
-                    <strong>GET /ws/conversation</strong> - WebSocket conversation
+                    <strong>GET /ws/conversation</strong> - WebSocket conversation (protected)
                 </div>
                 <div class="api-endpoint">
-                    <strong>GET /ws/command</strong> - WebSocket command execution
+                    <strong>GET /ws/command</strong> - WebSocket command execution (protected)
                 </div>
             </div>
         </div>
@@ -255,7 +367,5 @@ pub async fn serve_ui() -> Result<HttpResponse> {
     </html>
     "#;
 
-    Ok(HttpResponse::Ok()
-        .content_type("text/html")
-        .body(html_content))
+    Ok(HttpResponse::Ok().content_type("text/html").body(html_content))
 }
