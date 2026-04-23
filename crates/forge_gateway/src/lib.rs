@@ -1,0 +1,18 @@
+//! ForgeCode Web Gateway
+//!
+//! Provides a web interface for remote access to ForgeCode with URL token authentication.
+
+mod gateway;
+mod server;
+mod auth;
+mod handlers;
+mod websocket;
+
+pub use gateway::*;
+pub use server::*;
+pub use auth::*;
+pub use handlers::*;
+pub use websocket::*;
+
+#[cfg(test)]
+mod tests;
