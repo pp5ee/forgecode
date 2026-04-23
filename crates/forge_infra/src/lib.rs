@@ -16,8 +16,10 @@ mod inquire;
 mod kv_storage;
 mod mcp_client;
 mod mcp_server;
+mod url_token;
 mod walker;
 
+pub use auth::*;
 pub use console::StdConsoleWriter;
 pub use env::ForgeEnvironmentInfra;
 pub use executor::ForgeCommandExecutorService;
@@ -25,3 +27,4 @@ pub use forge_infra::*;
 pub use http::sanitize_headers;
 pub use kv_storage::CacacheStorage;
 pub use mcp_client::*;
+pub use url_token::*;
