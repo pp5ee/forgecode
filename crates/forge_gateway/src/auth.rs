@@ -15,6 +15,11 @@ use std::task::{Context, Poll};
 
 use forge_services::UrlTokenService;
 use forge_infra::UrlTokenRepository;
+use forge_domain::{UrlToken, UrlTokenId, CreateUrlTokenRequest, CreateUrlTokenResponse};
+use rand::{Rng, thread_rng};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use chrono::{DateTime, Utc, Duration};
 
 /// Extension trait to attach authenticated token ID to requests
 pub trait TokenAuthExt {
@@ -207,7 +212,7 @@ where
             // If token is provided, validate it and attach to request
             if let Some(token) = token_str {
                 let result = token_service.validate_token(&token).await;
-                
+
                 if let forge_domain::TokenValidationResult::Valid(token_id) = result {
                     req.extensions_mut().insert(token_id);
                 }
@@ -216,6 +221,63 @@ where
 
             service.call(req).await
         })
+    }
+}
+
+/// Simple token manager for local token generation and validation
+#[derive(Debug, Clone)]
+pub struct TokenManager {
+    tokens: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
+}
+
+impl TokenManager {
+    /// Create a new token manager
+    pub fn new() -> Self {
+        Self {
+            tokens: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Generate a new authentication token
+    pub fn generate_token(&self) -> String {
+        let token: String = thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect();
+
+        let expiration = Utc::now() + Duration::hours(24); // 24 hour expiration
+
+        self.tokens.lock().unwrap().insert(token.clone(), expiration);
+        token
+    }
+
+    /// Validate an authentication token
+    pub fn validate_token(&self, token: &str) -> bool {
+        let tokens = self.tokens.lock().unwrap();
+
+        if let Some(expiration) = tokens.get(token) {
+            // Check if token is still valid
+            if Utc::now() < *expiration {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Invalidate a token (mark as expired)
+    pub fn invalidate_token(&self, token: &str) {
+        let mut tokens = self.tokens.lock().unwrap();
+        tokens.remove(token);
+    }
+
+    /// Clean up expired tokens
+    pub fn cleanup_expired_tokens(&self) {
+        let now = Utc::now();
+        let mut tokens = self.tokens.lock().unwrap();
+
+        tokens.retain(|_, expiration| *expiration > now);
     }
 }
 

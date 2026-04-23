@@ -13,6 +13,7 @@ use forge_services::UrlTokenService;
 use crate::auth::{PublicWithOptionalAuth, UrlTokenAuth};
 use crate::handlers;
 use crate::monitoring::MonitoringService;
+use crate::rate_limiting::{RateLimitStore, RateLimitMiddleware, RateLimitConfig};
 use crate::websocket::WebSocketHandler;
 
 /// Configuration for the gateway server
@@ -104,6 +105,29 @@ impl<R: UrlTokenRepository + 'static> GatewayServer<R> {
     ) -> Self {
         let server_config = ServerConfig::from_env_and_config(&config);
         let monitoring_service = Arc::new(MonitoringService::new());
+
+        Self {
+            api,
+            config,
+            server_config,
+            token_service,
+            monitoring_service,
+            shutdown_signal: None,
+        }
+    }
+
+    /// Create a new gateway server with rate limiting
+    pub fn new_with_rate_limiting(
+        api: Arc<API>,
+        config: ForgeConfig,
+        token_service: Arc<UrlTokenService<R>>,
+        rate_limit_config: RateLimitConfig,
+    ) -> Self {
+        let server_config = ServerConfig::from_env_and_config(&config);
+        let monitoring_service = Arc::new(MonitoringService::new());
+
+        // Create rate limiting store
+        let rate_limit_store = Arc::new(RateLimitStore::new(rate_limit_config));
 
         Self {
             api,

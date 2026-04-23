@@ -8,6 +8,7 @@ mod auth;
 mod handlers;
 mod websocket;
 mod monitoring;
+mod rate_limiting;
 
 pub use gateway::*;
 pub use server::*;

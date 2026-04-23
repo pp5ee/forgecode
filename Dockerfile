@@ -1,8 +1,14 @@
-# Multi-stage build for ForgeGateway
-FROM rust:1.70-alpine AS builder
+# ForgeCode Gateway Docker Image
+# Multi-stage build for optimized production image
+
+# Stage 1: Build stage
+FROM rust:1.92-slim AS builder
 
 # Install build dependencies
-RUN apk add --no-cache musl-dev pkgconfig openssl-dev
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
 WORKDIR /app
@@ -10,37 +16,47 @@ WORKDIR /app
 # Copy source code
 COPY . .
 
-# Build the application
-RUN cargo build --release --bin forge-gateway
+# Build the gateway in release mode
+RUN cargo build --release --package forge_gateway
 
-# Runtime stage
-FROM alpine:latest
+# Stage 2: Runtime stage
+FROM debian:bookworm-slim
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN addgroup -S forge && adduser -S forge -G forge
+RUN useradd -m -u 1000 forgecode
+
+# Create app directory
+WORKDIR /app
 
 # Copy binary from builder stage
-COPY --from=builder /app/target/release/forge-gateway /usr/local/bin/
+COPY --from=builder /app/target/release/forge_gateway /app/forge_gateway
 
-# Create necessary directories
-RUN mkdir -p /data && chown forge:forge /data
+# Copy static files
+COPY --from=builder /app/crates/forge_gateway/static /app/static
+
+# Set ownership
+RUN chown -R forgecode:forgecode /app
 
 # Switch to non-root user
-USER forge
+USER forgecode
 
-# Expose port
+# Expose the gateway port
 EXPOSE 8080
 
-# Set environment variables
-ENV RUST_LOG=info
-ENV FORGE_CONFIG_PATH=/data/config.toml
-
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/api/health || exit 1
 
-# Start the application
-CMD ["forge-gateway"]
+# Environment variables
+ENV RUST_LOG=info
+ENV FORGE_GATEWAY_PORT=8080
+ENV FORGE_GATEWAY_BIND=0.0.0.0
+
+# Start the gateway
+CMD ["/app/forge_gateway"]

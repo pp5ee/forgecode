@@ -38,8 +38,62 @@ impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for Conversati
                 // Handle incoming conversation messages
                 log::debug!("Received WebSocket message: {}", text);
 
-                // Echo the message back for now
-                ctx.text(text);
+                // Parse the message as JSON
+                match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(data) => {
+                        if let (Some(message_type), Some(message_content)) = (
+                            data.get("type").and_then(|v| v.as_str()),
+                            data.get("message").and_then(|v| v.as_str()),
+                        ) {
+                            match message_type {
+                                "conversation_message" => {
+                                    let conversation_id = data.get("conversation_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("default");
+
+                                    // Process the conversation message using ForgeCode API
+                                    let api = self.api.clone();
+                                    let message = message_content.to_string();
+                                    let conversation_id = conversation_id.to_string();
+
+                                    // Spawn async task to handle the conversation
+                                    actix::spawn(async move {
+                                        match api.chat(&message, Some(&conversation_id)).await {
+                                            Ok(response) => {
+                                                // Send the response back via WebSocket
+                                                let response_data = serde_json::json!({
+                                                    "type": "conversation_response",
+                                                    "message": response.text,
+                                                    "conversation_id": response.conversation_id.unwrap_or(conversation_id)
+                                                });
+                                                ctx.text(response_data.to_string());
+                                            }
+                                            Err(e) => {
+                                                log::error!("Failed to process conversation: {}", e);
+                                                let error_data = serde_json::json!({
+                                                    "type": "error",
+                                                    "message": format!("Failed to process conversation: {}", e)
+                                                });
+                                                ctx.text(error_data.to_string());
+                                            }
+                                        }
+                                    });
+                                }
+                                _ => {
+                                    // Echo other message types back
+                                    ctx.text(text);
+                                }
+                            }
+                        } else {
+                            // Echo malformed messages back
+                            ctx.text(text);
+                        }
+                    }
+                    Err(_) => {
+                        // Echo non-JSON messages back
+                        ctx.text(text);
+                    }
+                }
             }
             Ok(ws::Message::Binary(bin)) => {
                 log::debug!("Received binary message: {} bytes", bin.len());
@@ -95,8 +149,63 @@ impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for CommandWeb
                 // Handle incoming command execution requests
                 log::debug!("Received command WebSocket message: {}", text);
 
-                // Echo the message back for now
-                ctx.text(text);
+                // Parse the message as JSON
+                match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(data) => {
+                        if let (Some(message_type), Some(command)) = (
+                            data.get("type").and_then(|v| v.as_str()),
+                            data.get("command").and_then(|v| v.as_str()),
+                        ) {
+                            match message_type {
+                                "execute_command" => {
+                                    let working_dir = data.get("working_dir")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("/");
+
+                                    // Execute the command using ForgeCode API
+                                    let api = self.api.clone();
+                                    let command_str = command.to_string();
+                                    let working_dir_str = working_dir.to_string();
+
+                                    // Spawn async task to handle command execution
+                                    actix::spawn(async move {
+                                        match api.execute_shell_command(&command_str, std::path::PathBuf::from(&working_dir_str)).await {
+                                            Ok(output) => {
+                                                // Send the command output back via WebSocket
+                                                let response_data = serde_json::json!({
+                                                    "type": "command_output",
+                                                    "output": output.stdout,
+                                                    "exit_code": output.exit_code,
+                                                    "success": output.exit_code == 0
+                                                });
+                                                ctx.text(response_data.to_string());
+                                            }
+                                            Err(e) => {
+                                                log::error!("Failed to execute command: {}", e);
+                                                let error_data = serde_json::json!({
+                                                    "type": "error",
+                                                    "message": format!("Failed to execute command: {}", e)
+                                                });
+                                                ctx.text(error_data.to_string());
+                                            }
+                                        }
+                                    });
+                                }
+                                _ => {
+                                    // Echo other message types back
+                                    ctx.text(text);
+                                }
+                            }
+                        } else {
+                            // Echo malformed messages back
+                            ctx.text(text);
+                        }
+                    }
+                    Err(_) => {
+                        // Echo non-JSON messages back
+                        ctx.text(text);
+                    }
+                }
             }
             Ok(ws::Message::Binary(bin)) => {
                 log::debug!("Received binary command message: {} bytes", bin.len());

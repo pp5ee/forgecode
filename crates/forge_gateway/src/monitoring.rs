@@ -115,6 +115,43 @@ impl MonitoringService {
         std::mem::size_of::<Self>() as u64
     }
 
+    /// Record a rate limiting event
+    pub async fn record_rate_limit_event(&self, ip_address: &str, token_id: Option<&str>) {
+        let client_id = token_id.unwrap_or(ip_address);
+        warn!("Rate limit exceeded for client: {}", client_id);
+    }
+
+    /// Record authentication attempt
+    pub async fn record_auth_attempt(&self, token_id: Option<&str>, success: bool) {
+        let client_id = token_id.unwrap_or("unknown");
+        if success {
+            info!("Authentication successful for token: {}", client_id);
+        } else {
+            warn!("Authentication failed for token: {}", client_id);
+        }
+    }
+
+    /// Record gateway performance metrics
+    pub async fn record_performance_metrics(&self, endpoint: &str, duration: Duration, status_code: u16) {
+        let mut metrics = self.metrics.write().await;
+
+        metrics.total_requests += 1;
+        if status_code < 400 {
+            metrics.successful_requests += 1;
+        } else {
+            metrics.failed_requests += 1;
+        }
+
+        // Update average response time
+        let total_time = metrics.average_response_time_ms * metrics.total_requests as f64;
+        let new_time = total_time + duration.as_millis() as f64;
+        metrics.average_response_time_ms = new_time / metrics.total_requests as f64;
+
+        metrics.last_updated = Instant::now();
+
+        debug!("Endpoint '{}' processed in {}ms with status {}", endpoint, duration.as_millis(), status_code);
+    }
+
     /// Log gateway startup
     pub fn log_startup(&self) {
         info!("ForgeCode Web Gateway starting up");
@@ -177,13 +214,56 @@ pub struct HealthCheckResponse {
 
 /// Initialize logging system
 pub fn init_logging() {
-    // Configure tracing subscriber for logging
+    // Configure tracing subscriber for structured logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .json() // Enable JSON formatting for structured logging
         .init();
 
-    info!("Logging system initialized");
+    info!(
+        event = "logging_initialized",
+        version = env!("CARGO_PKG_VERSION"),
+        "Logging system initialized with structured JSON format"
+    );
+}
+
+/// Structured logging macros for consistent logging
+#[macro_export]
+macro_rules! log_gateway_event {
+    ($event:expr, $($key:expr => $value:expr),*) => {
+        info!(
+            event = $event,
+            $($key = $value,)*
+            "Gateway event: {}", $event
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! log_gateway_error {
+    ($event:expr, $error:expr, $($key:expr => $value:expr),*) => {
+        error!(
+            event = $event,
+            error = $error,
+            $($key = $value,)*
+            "Gateway error in {}: {}", $event, $error
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! log_gateway_warning {
+    ($event:expr, $warning:expr, $($key:expr => $value:expr),*) => {
+        warn!(
+            event = $event,
+            warning = $warning,
+            $($key = $value,)*
+            "Gateway warning in {}: {}", $event, $warning
+        )
+    };
 }
 
 #[cfg(test)]
@@ -244,5 +324,81 @@ mod tests {
         assert_eq!(response.status, "healthy");
         assert_eq!(response.version, "1.0.0");
         assert_eq!(response.uptime_seconds, 3600);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_metrics_access() {
+        // Test that metrics can be accessed concurrently without deadlocks
+        let monitoring = MonitoringService::new();
+        let monitoring_clone = monitoring.clone();
+
+        let handle1 = tokio::spawn(async move {
+            for _ in 0..10 {
+                monitoring.record_successful_request(Duration::from_millis(50)).await;
+            }
+        });
+
+        let handle2 = tokio::spawn(async move {
+            for _ in 0..10 {
+                monitoring_clone.record_failed_request("concurrent_error").await;
+            }
+        });
+
+        let (result1, result2) = tokio::join!(handle1, handle2);
+        assert!(result1.is_ok(), "First concurrent task should complete");
+        assert!(result2.is_ok(), "Second concurrent task should complete");
+
+        let metrics = monitoring.get_metrics().await;
+        assert_eq!(metrics.total_requests, 20, "Should handle concurrent requests");
+    }
+
+    #[test]
+    fn test_logging_macros() {
+        // Test the structured logging macros
+        log_gateway_event!("test_event", "user_id" => "test_user", "action" => "login");
+        log_gateway_error!("test_error", "something went wrong", "file" => "test.rs", "line" => 42);
+        log_gateway_warning!("test_warning", "potential issue", "severity" => "low");
+
+        // These should compile and run without panicking
+        assert!(true, "Logging macros should work correctly");
+    }
+
+    #[tokio::test]
+    async fn test_performance_metrics_accuracy() {
+        let monitoring = MonitoringService::new();
+
+        // Record requests with different durations
+        monitoring.record_performance_metrics("/health", Duration::from_millis(100), 200).await;
+        monitoring.record_performance_metrics("/files", Duration::from_millis(200), 200).await;
+        monitoring.record_performance_metrics("/execute", Duration::from_millis(300), 500).await;
+
+        let metrics = monitoring.get_metrics().await;
+        assert_eq!(metrics.total_requests, 3);
+        assert_eq!(metrics.successful_requests, 2); // 200 status codes
+        assert_eq!(metrics.failed_requests, 1);     // 500 status code
+        assert_eq!(metrics.average_response_time_ms, 200.0); // (100+200+300)/3 = 200
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_logging() {
+        let monitoring = MonitoringService::new();
+
+        // Test rate limit event logging
+        monitoring.record_rate_limit_event("192.168.1.1", Some("token123")).await;
+        monitoring.record_rate_limit_event("10.0.0.1", None).await;
+
+        // These should complete without errors
+        assert!(true, "Rate limit logging should work");
+    }
+
+    #[test]
+    fn test_metrics_serialization() {
+        // Test that metrics can be serialized to JSON
+        let metrics = GatewayMetrics::default();
+        let json_result = serde_json::to_string(&metrics);
+        assert!(json_result.is_ok(), "Metrics should be serializable to JSON");
+
+        let json_string = json_result.unwrap();
+        assert!(json_string.contains("total_requests"), "JSON should contain metrics fields");
     }
 }
