@@ -54,3 +54,6 @@ pub trait FromDomain<T> {
     where
         Self: Sized;
 }
+
+mod url_token;
+pub use url_token::*;
