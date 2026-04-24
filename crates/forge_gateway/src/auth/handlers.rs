@@ -1,7 +1,6 @@
 use actix_web::{web, HttpResponse, Responder, HttpRequest};
 use serde::{Deserialize, Serialize};
-use crate::auth::{SecureTokenManager, AuthError, SecurityConfig};
-use crate::forgecode_client::ForgeCodeClient;
+use crate::auth::security::{SecureTokenManager, SecureToken, AuthError, SecurityConfig};
 
 #[derive(Debug, Deserialize)]
 pub struct TokenRequest {
@@ -20,21 +19,9 @@ pub struct RefreshTokenRequest {
     pub token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct RevokeTokenRequest {
     pub token: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CommandRequest {
-    pub command: String,
-    pub args: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CommandResponse {
-    pub output: String,
-    pub success: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,22 +177,4 @@ pub async fn get_security_config(
     config: web::Data<SecurityConfig>,
 ) -> impl Responder {
     HttpResponse::Ok().json(&*config)
-}
-
-/// Execute a forgecode command (protected endpoint)
-#[actix_web::post("/command/execute")]
-pub async fn execute_command(
-    forgecode_client: web::Data<ForgeCodeClient>,
-    request: web::Json<CommandRequest>,
-) -> impl Responder {
-    match forgecode_client.execute_command(&request.command, &request.args).await {
-        Ok(output) => HttpResponse::Ok().json(CommandResponse {
-            output,
-            success: true,
-        }),
-        Err(e) => HttpResponse::InternalServerError().json(CommandResponse {
-            output: format!("Error: {}", e),
-            success: false,
-        }),
-    }
 }

@@ -4,7 +4,10 @@
 //! and HTTP API endpoints for interacting with the forgecode service.
 //!
 //! # Features
-//! - Token-based authentication with permissions
+//! - Secure token-based authentication with permissions
+//! - URL-based token authentication with security validation
+//! - Token renewal with refresh window and limits
+//! - Rate limiting and brute force protection
 //! - WebSocket support for real-time code execution
 //! - HTTP API endpoints for code execution and token management
 //! - Integration with forgecode service for actual code execution
@@ -20,9 +23,12 @@ pub mod websocket;
 mod integration_tests;
 
 /// Re-export commonly used types for convenience
-pub use auth::{TokenManager, AuthError};
-pub use forgecode_client::{ForgeCodeClient, ExecuteCodeRequest, ExecuteCodeResponse};
-pub use handlers::{ExecuteRequest, ExecuteResponse, AuthRequest, AuthResponse};
+pub use auth::{
+    SecureTokenManager, SecureToken, SecurityConfig, AuthError,
+    secure_url_token_auth, security_headers, cors_config,
+    generate_token, refresh_token, revoke_token, get_token_info, cleanup_tokens, get_security_config,
+    TokenRequest, TokenResponse, RefreshTokenRequest, RevokeTokenRequest, TokenInfoResponse
+};
 
 /// Gateway configuration
 #[derive(Debug, Clone)]
@@ -31,8 +37,8 @@ pub struct GatewayConfig {
     pub port: u16,
     /// Base URL of the forgecode service
     pub forgecode_base_url: String,
-    /// Token expiration time in seconds
-    pub token_expiration_seconds: u64,
+    /// Security configuration for token authentication
+    pub security_config: SecurityConfig,
 }
 
 impl Default for GatewayConfig {
@@ -40,7 +46,7 @@ impl Default for GatewayConfig {
         Self {
             port: 8080,
             forgecode_base_url: "http://localhost:8081".to_string(),
-            token_expiration_seconds: 3600, // 1 hour
+            security_config: SecurityConfig::default(),
         }
     }
 }

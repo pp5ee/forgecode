@@ -1,18 +1,16 @@
 version: '3.8'
 
 services:
-  forgecode-gateway:
+  forge-gateway:
     build: .
     ports:
       - "8080:8080"
     environment:
       - RUST_LOG=info
-      - BIND_ADDRESS=0.0.0.0
-      - PORT=8080
+      - GATEWAY_PORT=8080
+      - FORGECODE_BASE_URL=http://forgecode:8081
     volumes:
-      - ./config:/app/config:ro
-      - ./logs:/app/logs
-      - ./data:/app/data
+      - ./static:/app/static:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -21,39 +19,40 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - forgecode-network
+      - forge-network
+    depends_on:
+      - forgecode
 
-  # Redis for session storage and caching
+  forgecode:
+    image: forgecode:latest
+    ports:
+      - "8081:8081"
+    environment:
+      - RUST_LOG=info
+    networks:
+      - forge-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for session storage and rate limiting
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
+    networks:
+      - forge-network
     restart: unless-stopped
     command: redis-server --appendonly yes
-    networks:
-      - forgecode-network
-
-  # Nginx for reverse proxy and SSL termination
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
-      - ./logs/nginx:/var/log/nginx
-    depends_on:
-      - forgecode-gateway
-    restart: unless-stopped
-    networks:
-      - forgecode-network
+      - redis_data:/data
 
 volumes:
   redis_data:
 
 networks:
-  forgecode-network:
+  forge-network:
     driver: bridge

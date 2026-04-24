@@ -1,11 +1,11 @@
-use actix_web::{dev::ServiceRequest, Error, HttpMessage};
+use actix_web::{dev::ServiceRequest, Error, HttpMessage, http::header};
 use actix_web_httpauth::extractors::bearer::{BearerAuth, Config};
 use actix_web_httpauth::extractors::AuthenticationError;
 use std::net::SocketAddr;
-use crate::auth::{SecureTokenManager, SecureToken, AuthError};
+use crate::auth::security::{SecureTokenManager, SecureToken, AuthError};
 
 /// Enhanced URL token authentication with security features
-pub async fn url_token_auth(
+pub async fn secure_url_token_auth(
     req: ServiceRequest,
     credentials: BearerAuth,
 ) -> Result<ServiceRequest, (Error, ServiceRequest)> {
@@ -98,7 +98,7 @@ fn extract_client_ip(req: &ServiceRequest) -> Option<String> {
 /// Extract User-Agent header from request
 fn extract_user_agent(req: &ServiceRequest) -> Option<String> {
     req.headers()
-        .get("user-agent")
+        .get(header::USER_AGENT)
         .and_then(|ua| ua.to_str().ok())
         .map(|s| s.to_string())
 }
@@ -133,11 +133,11 @@ fn validate_token_usage(
 /// Security headers middleware for authentication endpoints
 pub fn security_headers() -> actix_web::middleware::DefaultHeaders {
     actix_web::middleware::DefaultHeaders::new()
-        .add(("Strict-Transport-Security", "max-age=31536000; includeSubDomains"))
-        .add(("X-Content-Type-Options", "nosniff"))
-        .add(("X-Frame-Options", "DENY"))
-        .add(("X-XSS-Protection", "1; mode=block"))
-        .add(("Referrer-Policy", "strict-origin-when-cross-origin"))
+        .add((header::STRICT_TRANSPORT_SECURITY, "max-age=31536000; includeSubDomains"))
+        .add((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .add((header::X_FRAME_OPTIONS, "DENY"))
+        .add((header::X_XSS_PROTECTION, "1; mode=block"))
+        .add((header::REFERRER_POLICY, "strict-origin-when-cross-origin"))
 }
 
 /// CORS configuration for authentication endpoints
@@ -150,6 +150,6 @@ pub fn cors_config() -> actix_cors::Cors {
             origin.as_bytes().starts_with(b"https://") // Require HTTPS for production
         })
         .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])
-        .allowed_headers(vec!["Authorization", "Content-Type"])
+        .allowed_headers(vec![header::AUTHORIZATION, header::CONTENT_TYPE])
         .max_age(3600)
 }

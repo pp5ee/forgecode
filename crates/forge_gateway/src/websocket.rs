@@ -1,93 +1,35 @@
-//! WebSocket implementation for real-time terminal communication
-
-use actix_web::{web, Error, HttpRequest, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
-use uuid::Uuid;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::time::{Duration, Instant};
+use uuid::Uuid;
 
-/// WebSocket message types
-#[derive(Debug, Deserialize, Serialize)]
-pub struct TerminalCommand {
-    pub command: String,
-    pub args: Vec<String>,
-    pub working_dir: Option<String>,
-}
+use crate::auth::{extract_token_from_extensions, SecureTokenManager};
+use crate::forgecode_client::ForgeCodeClient;
 
-#[derive(Debug, Serialize)]
-pub struct TerminalOutput {
-    pub output: String,
-    pub is_error: bool,
-    pub exit_code: Option<i32>,
-}
-
-/// WebSocket connection actor
-pub struct WebSocketConnection {
-    /// Connection ID
-    id: Uuid,
+/// WebSocket connection for real-time terminal streaming
+pub struct TerminalWebSocket {
+    /// Unique session ID
+    session_id: Uuid,
     /// Last heartbeat time
     hb: Instant,
-    /// Command execution channel
-    command_sender: Option<mpsc::Sender<String>>,
+    /// ForgeCode client for command execution
+    forgecode_client: web::Data<ForgeCodeClient>,
+    /// Token manager for authentication
+    token_manager: web::Data<SecureTokenManager>,
 }
 
-impl WebSocketConnection {
+impl TerminalWebSocket {
     /// Create a new WebSocket connection
-    pub fn new() -> Self {
+    pub fn new(
+        forgecode_client: web::Data<ForgeCodeClient>,
+        token_manager: web::Data<SecureTokenManager>,
+    ) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
             hb: Instant::now(),
-            command_sender: None,
-        }
-    }
-
-    /// Execute a command and stream output back via WebSocket
-    async fn execute_command(&self, cmd: TerminalCommand, ctx: &mut ws::WebsocketContext<Self>) {
-        let (tx, mut rx) = mpsc::channel(32);
-
-        // Spawn command execution task
-        let connection_id = self.id;
-        tokio::spawn(async move {
-            // Use the forgecode integration service to execute the command
-            // This will be properly integrated once the forgecode service is available
-            let command_str = if !cmd.args.is_empty() {
-                format!("{} {}", cmd.command, cmd.args.join(" "))
-            } else {
-                cmd.command.clone()
-            };
-
-            // For now, simulate command execution with basic output
-            // In a real implementation, this would call the forgecode API
-            let output = format!("Executing: {}\n", command_str);
-            if let Err(e) = tx.send(format!("stdout:{}", output)).await {
-                tracing::error!("Failed to send output for connection {}: {}", connection_id, e);
-            }
-
-            // Simulate command completion
-            let completion_msg = format!("Command '{}' completed successfully\n", cmd.command);
-            if let Err(e) = tx.send(format!("stdout:{}", completion_msg)).await {
-                tracing::error!("Failed to send completion for connection {}: {}", connection_id, e);
-            }
-
-            // Send exit code
-            if let Err(e) = tx.send(format!("exit:{}", 0)).await {
-                tracing::error!("Failed to send exit code for connection {}: {}", connection_id, e);
-            }
-        });
-
-        // Handle output streaming
-        let mut receiver = Some(rx);
-        while let Some(rx) = receiver.take() {
-            match rx.recv().await {
-                Some(output) => {
-                    ctx.text(output);
-                    receiver = Some(rx);
-                }
-                None => break,
-            }
+            forgecode_client,
+            token_manager,
         }
     }
 
@@ -104,21 +46,39 @@ impl WebSocketConnection {
     }
 }
 
-impl actix::Actor for WebSocketConnection {
+impl actix::Actor for TerminalWebSocket {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
         self.hb(ctx);
-        tracing::info!("WebSocket connection established: {}", self.id);
+        log::info!("WebSocket connection started for session: {}", self.session_id);
     }
 
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        tracing::info!("WebSocket connection closed: {}", self.id);
+    fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
+        log::info!("WebSocket connection stopped for session: {}", self.session_id);
+        actix::Running::Stop
     }
 }
 
-/// Handler for WebSocket messages
-impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketConnection {
+/// WebSocket message types
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum WebSocketMessage {
+    /// Execute a command
+    ExecuteCommand { command: String, args: Vec<String> },
+    /// Send input to running command
+    SendInput { input: String },
+    /// Heartbeat response
+    Heartbeat,
+    /// Error message
+    Error { message: String },
+    /// Command output
+    Output { data: String, is_stderr: bool },
+    /// Command completed
+    CommandCompleted { exit_code: i32 },
+}
+
+impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for TerminalWebSocket {
     fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
         match msg {
             Ok(ws::Message::Ping(msg)) => {
@@ -129,30 +89,64 @@ impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketC
                 self.hb = Instant::now();
             }
             Ok(ws::Message::Text(text)) => {
-                // Handle incoming text messages (terminal input)
-                tracing::debug!("Received WebSocket message: {}", text);
+                match serde_json::from_str::<WebSocketMessage>(&text) {
+                    Ok(WebSocketMessage::ExecuteCommand { command, args }) => {
+                        // Execute command through forgecode client
+                        let client = self.forgecode_client.clone();
+                        let session_id = self.session_id;
 
-                // Parse command from JSON
-                match serde_json::from_str::<TerminalCommand>(&text) {
-                    Ok(cmd) => {
-                        // Execute the command
-                        let ctx_clone = ctx.clone();
-                        tokio::spawn(async move {
-                            self.execute_command(cmd, &mut ctx_clone).await;
+                        actix::spawn(async move {
+                            match client.execute_command(&command, &args).await {
+                                Ok(output) => {
+                                    // Send output in chunks to simulate real-time streaming
+                                    let message = WebSocketMessage::Output {
+                                        data: output,
+                                        is_stderr: false,
+                                    };
+                                    // In real implementation, we'd send this back to the WebSocket
+                                    // For now, we'll log it
+                                    log::info!("Command output for session {}: {:?}", session_id, message);
+                                }
+                                Err(e) => {
+                                    let message = WebSocketMessage::Error {
+                                        message: format!("Command execution failed: {}", e),
+                                    };
+                                    log::error!("Command error for session {}: {:?}", session_id, message);
+                                }
+                            }
                         });
                     }
-                    Err(_) => {
-                        // If not a valid command, treat as raw terminal input
-                        ctx.text(format!("echo:{}", text));
+                    Ok(WebSocketMessage::SendInput { input }) => {
+                        // Handle user input for interactive commands
+                        log::info!("Received input for session {}: {}", self.session_id, input);
+                        // In a real implementation, we'd send this to the running process
+                    }
+                    Ok(WebSocketMessage::Heartbeat) => {
+                        // Respond to heartbeat
+                        let response = WebSocketMessage::Heartbeat;
+                        if let Ok(json) = serde_json::to_string(&response) {
+                            ctx.text(json);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Invalid WebSocket message: {}", e);
+                        let error_msg = WebSocketMessage::Error {
+                            message: format!("Invalid message format: {}", e),
+                        };
+                        if let Ok(json) = serde_json::to_string(&error_msg) {
+                            ctx.text(json);
+                        }
+                    }
+                    _ => {
+                        log::warn!("Unsupported WebSocket message type");
                     }
                 }
             }
-            Ok(ws::Message::Binary(bin)) => {
-                // Handle binary messages
-                tracing::debug!("Received binary message: {} bytes", bin.len());
-            }
             Ok(ws::Message::Close(reason)) => {
                 ctx.close(reason);
+                ctx.stop();
+            }
+            Ok(ws::Message::Continuation(_)) => {
                 ctx.stop();
             }
             _ => (),
@@ -164,36 +158,79 @@ impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketC
 pub async fn websocket_handler(
     req: HttpRequest,
     stream: web::Payload,
-    token_manager: web::Data<Mutex<auth::TokenManager>>,
-) -> Result<HttpResponse, Error> {
-    // Check authentication token
-    if let Some(auth_header) = req.headers().get("Authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("Bearer ") {
-                let token = &auth_str[7..];
-                // Validate token against token manager
-                if token_manager.lock().unwrap().validate_token(token) {
-                    let resp = ws::start(WebSocketConnection::new(), &req, stream);
-                    tracing::info!("WebSocket connection established with Bearer token");
-                    return resp;
-                }
-            }
+    forgecode_client: web::Data<ForgeCodeClient>,
+    token_manager: web::Data<SecureTokenManager>,
+) -> Result<HttpResponse, actix_web::Error> {
+    // Extract and validate token
+    let token = match extract_token_from_extensions(&req) {
+        Some(token) => token,
+        None => {
+            return Ok(HttpResponse::Unauthorized().body("Authentication required"));
+        }
+    };
+
+    // Check if token has execute permission
+    if !token.permissions.contains(&"execute".to_string()) {
+        return Ok(HttpResponse::Forbidden().body("Token does not have execute permission"));
+    }
+
+    // Create WebSocket connection
+    let ws = TerminalWebSocket::new(forgecode_client, token_manager);
+    let resp = ws::start(ws, &req, stream)?;
+    Ok(resp)
+}
+
+/// Terminal session management
+pub struct TerminalSessionManager {
+    /// Active terminal sessions
+    sessions: std::sync::RwLock<std::collections::HashMap<Uuid, TerminalSession>>,
+}
+
+impl TerminalSessionManager {
+    pub fn new() -> Self {
+        Self {
+            sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
         }
     }
 
-    // Check URL token parameter
-    if let Some(token) = req.uri().query()
-        .and_then(|q| url::form_urlencoded::parse(q.as_bytes()).find(|(k, _)| k == "token"))
-        .map(|(_, v)| v.into_owned())
-    {
-        // Validate URL token against token manager
-        if token_manager.lock().unwrap().validate_token(&token) {
-            let resp = ws::start(WebSocketConnection::new(), &req, stream);
-            tracing::info!("WebSocket connection established with URL token");
-            return resp;
+    /// Create a new terminal session
+    pub fn create_session(&self) -> Uuid {
+        let session_id = Uuid::new_v4();
+        let session = TerminalSession::new(session_id);
+        self.sessions.write().unwrap().insert(session_id, session);
+        session_id
+    }
+
+    /// Get a terminal session
+    pub fn get_session(&self, session_id: &Uuid) -> Option<TerminalSession> {
+        self.sessions.read().unwrap().get(session_id).cloned()
+    }
+
+    /// Remove a terminal session
+    pub fn remove_session(&self, session_id: &Uuid) {
+        self.sessions.write().unwrap().remove(session_id);
+    }
+}
+
+/// Individual terminal session
+#[derive(Clone)]
+pub struct TerminalSession {
+    pub session_id: Uuid,
+    pub created_at: std::time::SystemTime,
+    pub last_activity: std::time::SystemTime,
+}
+
+impl TerminalSession {
+    pub fn new(session_id: Uuid) -> Self {
+        let now = std::time::SystemTime::now();
+        Self {
+            session_id,
+            created_at: now,
+            last_activity: now,
         }
     }
 
-    tracing::warn!("WebSocket connection rejected: No valid authentication");
-    Err(actix_web::error::ErrorUnauthorized("Authentication required for WebSocket connection"))
+    pub fn update_activity(&mut self) {
+        self.last_activity = std::time::SystemTime::now();
+    }
 }

@@ -3,254 +3,357 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forgecode Gateway</title>
+    <title>Forge Gateway</title>
     <style>
-        body {
-            font-family: 'Courier New', monospace;
-            background-color: #1e1e1e;
-            color: #d4d4d4;
+        * {
             margin: 0;
-            padding: 20px;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
         }
 
         .container {
-            max-width: 800px;
+            max-width: 1200px;
             margin: 0 auto;
+            padding: 2rem;
         }
 
         .header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 3rem;
+        }
+
+        .header h1 {
+            color: white;
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            color: rgba(255,255,255,0.8);
+            font-size: 1.2rem;
+        }
+
+        .dashboard {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            border-left: 4px solid #667eea;
+        }
+
+        .card h3 {
+            color: #495057;
+            margin-bottom: 1rem;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.offline {
+            background: #f8d7da;
+            color: #721c24;
         }
 
         .terminal {
-            background-color: #000;
-            border: 1px solid #444;
-            border-radius: 5px;
-            padding: 15px;
-            height: 400px;
-            overflow-y: auto;
-            margin-bottom: 20px;
-        }
-
-        .input-line {
-            display: flex;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-
-        .prompt {
-            color: #00ff00;
-            margin-right: 10px;
-        }
-
-        .command-input {
-            background: transparent;
-            border: none;
-            color: #d4d4d4;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            outline: none;
-            flex: 1;
-        }
-
-        .output {
-            white-space: pre-wrap;
-            margin-bottom: 10px;
-        }
-
-        .success {
-            color: #00ff00;
-        }
-
-        .error {
-            color: #ff4444;
-        }
-
-        .auth-section {
-            background-color: #2d2d2d;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-        }
-
-        .token-input {
-            width: 300px;
-            padding: 5px;
             background: #1e1e1e;
-            border: 1px solid #444;
-            color: #d4d4d4;
-            border-radius: 3px;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            padding: 1rem;
+            border-radius: 6px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 1rem;
         }
 
-        button {
-            background: #007acc;
-            border: none;
+        .input-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .input-group input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+
+        .btn {
+            background: #667eea;
             color: white;
-            padding: 8px 16px;
-            border-radius: 3px;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
             cursor: pointer;
-            margin-left: 10px;
+            font-size: 1rem;
+            transition: background 0.2s;
         }
 
-        button:hover {
-            background: #005a9e;
+        .btn:hover {
+            background: #5a6fd8;
         }
 
-        button:disabled {
-            background: #555;
+        .btn:disabled {
+            background: #ccc;
             cursor: not-allowed;
         }
 
-        .hidden {
-            display: none;
+        .token-section {
+            margin-bottom: 2rem;
+        }
+
+        .token-display {
+            background: #e9ecef;
+            padding: 1rem;
+            border-radius: 4px;
+            font-family: monospace;
+            word-break: break-all;
+            margin-bottom: 1rem;
+        }
+
+        .api-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Forgecode Gateway</h1>
-            <p>Web interface for forgecode programming capabilities</p>
+            <h1>🔨 Forge Gateway</h1>
+            <p>Secure API Gateway for ForgeCode Platform</p>
         </div>
 
-        <div class="auth-section" id="authSection">
-            <h3>Authentication</h3>
-            <p>Enter your access token to use the gateway:</p>
-            <input type="text" id="tokenInput" class="token-input" placeholder="Enter token...">
-            <button onclick="setToken()">Set Token</button>
-            <button onclick="generateToken()">Generate New Token</button>
-            <span id="tokenStatus"></span>
-        </div>
-
-        <div class="terminal" id="terminalSection">
-            <div id="output">
-                <div class="output">Forgecode Gateway Terminal</div>
-                <div class="output">Type 'help' for available commands</div>
-                <div class="output">Enter your token above to start</div>
+        <div class="dashboard">
+            <div class="api-status">
+                <span id="statusIndicator" class="status offline">●</span>
+                <span id="statusText">Checking API status...</span>
             </div>
-            <div class="input-line">
-                <span class="prompt">$</span>
-                <input type="text" id="commandInput" class="command-input" placeholder="Enter command..." disabled>
+
+            <div class="token-section">
+                <div class="card">
+                    <h3>🔑 Generate API Token</h3>
+                    <div class="input-group">
+                        <input type="text" id="permissionsInput" placeholder="Enter permissions (comma-separated)" value="read,write,execute">
+                        <button class="btn" onclick="generateToken()">Generate Token</button>
+                    </div>
+                    <div id="tokenResult" class="token-display" style="display: none;">
+                        <strong>Your API Token:</strong>
+                        <div id="generatedToken"></div>
+                        <div><small>Expires in: <span id="tokenExpiry"></span></small></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>💻 Command Execution</h3>
+                <div class="terminal" id="terminalOutput">
+                    <div>> Welcome to Forge Gateway Terminal</div>
+                    <div>> Use the form below to execute commands</div>
+                </div>
+                <div class="input-group">
+                    <input type="text" id="commandInput" placeholder="Enter command to execute" onkeypress="handleKeyPress(event)">
+                    <button class="btn" onclick="executeCommand()" id="executeBtn">Execute</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📊 System Information</h3>
+                <div id="systemInfo">
+                    <p>Loading system information...</p>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        let currentToken = null;
+        // API base URL
+        const API_BASE = '/api';
 
-        function setToken() {
-            const tokenInput = document.getElementById('tokenInput');
-            const token = tokenInput.value.trim();
+        // Check API status on load
+        async function checkApiStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const statusIndicator = document.getElementById('statusIndicator');
+                const statusText = document.getElementById('statusText');
 
-            if (token) {
-                currentToken = token;
-                document.getElementById('tokenStatus').textContent = '✓ Token set';
-                document.getElementById('tokenStatus').className = 'success';
-                document.getElementById('commandInput').disabled = false;
-                document.getElementById('commandInput').focus();
-                addOutput('Token validated. You can now use the terminal.');
-            } else {
-                document.getElementById('tokenStatus').textContent = 'Please enter a token';
-                document.getElementById('tokenStatus').className = 'error';
+                if (response.ok) {
+                    statusIndicator.className = 'status online';
+                    statusIndicator.textContent = '●';
+                    statusText.textContent = 'API is online';
+                } else {
+                    throw new Error('API not responding');
+                }
+            } catch (error) {
+                const statusIndicator = document.getElementById('statusIndicator');
+                const statusText = document.getElementById('statusText');
+                statusIndicator.className = 'status offline';
+                statusIndicator.textContent = '●';
+                statusText.textContent = 'API is offline';
             }
         }
 
+        // Generate API token
         async function generateToken() {
+            const permissionsInput = document.getElementById('permissionsInput');
+            const permissions = permissionsInput.value.split(',').map(p => p.trim()).filter(p => p);
+
+            if (permissions.length === 0) {
+                alert('Please enter at least one permission');
+                return;
+            }
+
             try {
-                const response = await fetch('/api/token/generate', {
+                const response = await fetch(`${API_BASE}/auth/token`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        permissions: ['execute', 'read', 'write']
-                    })
+                    body: JSON.stringify({ permissions })
                 });
 
                 if (response.ok) {
                     const data = await response.json();
-                    document.getElementById('tokenInput').value = data.token;
-                    document.getElementById('tokenStatus').textContent = '✓ Token generated';
-                    document.getElementById('tokenStatus').className = 'success';
-                    addOutput('New token generated. Click "Set Token" to use it.');
+                    const tokenResult = document.getElementById('tokenResult');
+                    const generatedToken = document.getElementById('generatedToken');
+                    const tokenExpiry = document.getElementById('tokenExpiry');
+
+                    generatedToken.textContent = data.token;
+                    tokenExpiry.textContent = `${data.expires_in} seconds`;
+                    tokenResult.style.display = 'block';
+
+                    // Copy token to clipboard
+                    navigator.clipboard.writeText(data.token);
+                    alert('Token generated and copied to clipboard!');
                 } else {
                     throw new Error('Failed to generate token');
                 }
             } catch (error) {
-                document.getElementById('tokenStatus').textContent = 'Error generating token';
-                document.getElementById('tokenStatus').className = 'error';
-                addOutput('Error: ' + error.message, 'error');
+                alert('Error generating token: ' + error.message);
             }
         }
 
-        function addOutput(text, type = 'normal') {
-            const outputDiv = document.getElementById('output');
-            const outputLine = document.createElement('div');
-            outputLine.className = 'output ' + type;
-            outputLine.textContent = text;
-            outputDiv.appendChild(outputLine);
+        // Execute command
+        async function executeCommand() {
+            const commandInput = document.getElementById('commandInput');
+            const executeBtn = document.getElementById('executeBtn');
+            const terminalOutput = document.getElementById('terminalOutput');
 
-            // Auto-scroll to bottom
-            outputDiv.scrollTop = outputDiv.scrollHeight;
-        }
+            const command = commandInput.value.trim();
+            if (!command) return;
 
-        async function executeCommand(command) {
-            if (!currentToken) {
-                addOutput('Error: No token set. Please set a token first.', 'error');
-                return;
-            }
+            executeBtn.disabled = true;
 
-            addOutput('$ ' + command);
+            // Add command to terminal
+            terminalOutput.innerHTML += `<div>> ${command}</div>`;
 
             try {
-                const [cmd, ...args] = command.split(' ');
+                const token = localStorage.getItem('forge_token');
+                if (!token) {
+                    terminalOutput.innerHTML += '<div style="color: #ff6b6b;">Error: No API token found. Generate a token first.</div>';
+                    return;
+                }
 
-                const response = await fetch('/api/command/execute', {
+                const response = await fetch(`${API_BASE}/execute`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + currentToken
+                        'Authorization': `Bearer ${token}`
                     },
-                    body: JSON.stringify({
-                        command: cmd,
-                        args: args
-                    })
+                    body: JSON.stringify({ command })
                 });
 
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.success) {
-                        addOutput(data.output, 'success');
-                    } else {
-                        addOutput(data.output, 'error');
-                    }
+                    terminalOutput.innerHTML += `<div>${data.output}</div>`;
                 } else {
-                    throw new Error('Command execution failed');
+                    const error = await response.json();
+                    terminalOutput.innerHTML += `<div style="color: #ff6b6b;">Error: ${error.error}</div>`;
                 }
             } catch (error) {
-                addOutput('Error: ' + error.message, 'error');
+                terminalOutput.innerHTML += `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+            }
+
+            commandInput.value = '';
+            executeBtn.disabled = false;
+            terminalOutput.scrollTop = terminalOutput.scrollHeight;
+        }
+
+        // Handle Enter key in command input
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                executeCommand();
             }
         }
 
-        // Handle command input
-        document.getElementById('commandInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                const command = this.value.trim();
-                if (command) {
-                    executeCommand(command);
-                    this.value = '';
+        // Load system information
+        async function loadSystemInfo() {
+            try {
+                const response = await fetch(`${API_BASE}/system/info`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const systemInfo = document.getElementById('systemInfo');
+                    systemInfo.innerHTML = `
+                        <p><strong>Version:</strong> ${data.version || 'Unknown'}</p>
+                        <p><strong>Uptime:</strong> ${data.uptime || 'Unknown'}</p>
+                        <p><strong>Active Tokens:</strong> ${data.active_tokens || 'Unknown'}</p>
+                    `;
                 }
+            } catch (error) {
+                console.error('Failed to load system info:', error);
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            checkApiStatus();
+            loadSystemInfo();
+
+            // Check for existing token
+            const existingToken = localStorage.getItem('forge_token');
+            if (existingToken) {
+                document.getElementById('permissionsInput').value = 'read,write,execute';
             }
         });
-
-        // Check URL for token parameter
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlToken = urlParams.get('token');
-        if (urlToken) {
-            document.getElementById('tokenInput').value = urlToken;
-            setToken();
-        }
     </script>
 </body>
 </html>

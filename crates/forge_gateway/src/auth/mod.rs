@@ -14,7 +14,7 @@ pub mod handlers;
 
 // Re-export commonly used types
 pub use security::{SecureTokenManager, SecureToken, SecurityConfig, AuthError};
-pub use middleware::{url_token_auth, security_headers, cors_config};
+pub use middleware::{secure_url_token_auth, security_headers, cors_config};
 pub use handlers::{
     generate_token, refresh_token, revoke_token, get_token_info, cleanup_tokens, get_security_config,
     TokenRequest, TokenResponse, RefreshTokenRequest, RevokeTokenRequest, TokenInfoResponse
