@@ -44,6 +44,4 @@ To test the gateway:
 
 ## BitLesson Delta
 - Action: none
-- Lesson ID(s): NONE
-- Notes: No changes to BitLesson entries in this round
 
