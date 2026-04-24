@@ -44,11 +44,11 @@ impl TokenManager {
 
 // URL Token Middleware
 pub struct UrlTokenMiddleware {
-    token_manager: Arc<TokenManager>,
+    token_manager: web::Data<Mutex<TokenManager>>,
 }
 
 impl UrlTokenMiddleware {
-    pub fn new(token_manager: Arc<TokenManager>) -> Self {
+    pub fn new(token_manager: web::Data<Mutex<TokenManager>>) -> Self {
         Self { token_manager }
     }
 }
@@ -70,7 +70,7 @@ impl actix_web::dev::Transform<actix_web::dev::Service, actix_web::dev::ServiceR
 
 pub struct UrlTokenMiddlewareService {
     service: actix_web::dev::Service,
-    token_manager: Arc<TokenManager>,
+    token_manager: web::Data<Mutex<TokenManager>>,
 }
 
 impl actix_web::dev::Service<actix_web::dev::ServiceRequest> for UrlTokenMiddlewareService {
@@ -89,7 +89,7 @@ impl actix_web::dev::Service<actix_web::dev::ServiceRequest> for UrlTokenMiddlew
         Box::pin(async move {
             // Skip authentication for certain paths
             let path = req.path();
-            if path == "/auth/health" || path.starts_with("/auth/") {
+            if path == "/health" || path.starts_with("/auth/") {
                 return service.call(req).await;
             }
 
@@ -107,7 +107,7 @@ impl actix_web::dev::Service<actix_web::dev::ServiceRequest> for UrlTokenMiddlew
             };
 
             // Validate token
-            if token.is_empty() || !token_manager.validate_token(token) {
+            if token.is_empty() || !token_manager.lock().unwrap().validate_token(token) {
                 let redirect_url = format!("/auth/error?message={}", urlencoding::encode("Invalid or missing token"));
                 let response = actix_web::HttpResponse::Found()
                     .append_header(("Location", redirect_url))

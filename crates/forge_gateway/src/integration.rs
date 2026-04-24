@@ -73,6 +73,8 @@ impl ForgeService {
                     self.list_conversations(api).await
                 } else if command.starts_with("workspaces") {
                     self.list_workspaces(api).await
+                } else if command.starts_with("discover") {
+                    self.discover_files(api).await
                 } else {
                     // Try to execute as a shell command
                     self.execute_shell_command(api, command).await
@@ -251,8 +253,31 @@ Use 'help <command>' for more information on a specific command."#.to_string()
         }
     }
 
+    async fn discover_files(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.discover().await {
+            Ok(files) => {
+                if files.is_empty() {
+                    Ok("No files discovered.".to_string())
+                } else {
+                    let mut output = "Discovered Files:\n\n".to_string();
+                    for file in files.iter().take(20) { // Limit to first 20 files
+                        output.push_str(&format!("- {}\n", file.name));
+                    }
+                    if files.len() > 20 {
+                        output.push_str(&format!("... and {} more files\n", files.len() - 20));
+                    }
+                    Ok(output)
+                }
+            }
+            Err(e) => Err(format!("Failed to discover files: {}", e)),
+        }
+    }
+
     async fn execute_shell_command(&self, api: &ForgeAPI, command: &str) -> Result<String, String> {
-        let cwd = api.environment().cwd.clone();
+        // Get the current working directory from the environment
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?;
+
         match api.execute_shell_command(command, cwd).await {
             Ok(output) => {
                 let mut result = format!("Command executed successfully.\n\n");
