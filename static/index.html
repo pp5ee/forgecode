@@ -3,309 +3,276 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forgecode Gateway</title>
+    <title>ForgeCode Gateway</title>
     <style>
         body {
-            font-family: 'Courier New', monospace;
-            background-color: #1e1e1e;
-            color: #d4d4d4;
+            font-family: Arial, sans-serif;
             margin: 0;
-            padding: 20px;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
-
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
+            max-width: 800px;
+            margin: 20px;
+            padding: 40px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         }
-
-        .header {
+        h1 {
+            color: #333;
             text-align: center;
             margin-bottom: 30px;
-            border-bottom: 2px solid #007acc;
-            padding-bottom: 20px;
+            font-size: 2.5em;
         }
-
-        .terminal {
-            background-color: #000;
-            border: 1px solid #007acc;
-            border-radius: 5px;
+        .auth-section, .gateway-section {
+            margin: 30px 0;
             padding: 20px;
-            min-height: 400px;
-            overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
+            border-radius: 8px;
+            background: #f8f9fa;
         }
-
-        .input-line {
-            display: flex;
-            align-items: center;
-            margin-top: 10px;
+        .status {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+            background: #e8f5e8;
+            border: 1px solid #4caf50;
+            font-weight: bold;
         }
-
-        .prompt {
-            color: #00ff00;
-            margin-right: 10px;
-        }
-
-        .command-input {
-            background: transparent;
-            border: none;
-            color: #d4d4d4;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            width: 100%;
-            outline: none;
-        }
-
-        .output {
-            color: #d4d4d4;
-            white-space: pre-wrap;
-        }
-
         .error {
-            color: #f44747;
+            background: #ffebee;
+            border: 1px solid #f44336;
+            color: #c62828;
         }
-
-        .success {
+        .terminal {
+            background: #000;
             color: #00ff00;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            height: 300px;
+            overflow-y: auto;
+            margin: 10px 0;
         }
-
-        .status-bar {
-            background-color: #007acc;
+        .button {
+            background: #2196f3;
             color: white;
-            padding: 10px;
-            border-radius: 0 0 5px 5px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: background 0.3s;
         }
-
-        .token-info {
-            font-size: 12px;
+        .button:hover {
+            background: #1976d2;
         }
-
-        .auth-section {
-            background-color: #2d2d30;
-            padding: 20px;
-            border-radius: 5px;
-            margin-bottom: 20px;
+        .button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
         }
-
-        .auth-input {
-            background-color: #3c3c3c;
-            border: 1px solid #007acc;
-            color: #d4d4d4;
-            padding: 10px;
-            border-radius: 3px;
-            width: 300px;
+        input[type="text"] {
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            width: 70%;
             margin-right: 10px;
         }
-
-        .auth-button {
-            background-color: #007acc;
-            border: none;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 3px;
-            cursor: pointer;
-        }
-
-        .auth-button:hover {
-            background-color: #005a9e;
+        .hidden {
+            display: none;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>Forgecode Gateway</h1>
-            <p>Web interface for forgecode programming environment</p>
-        </div>
+        <h1>🔐 ForgeCode Gateway</h1>
 
+        <!-- Authentication Section -->
         <div class="auth-section" id="authSection">
-            <h3>Authentication</h3>
-            <p>Enter your access token to continue:</p>
-            <input type="text" class="auth-input" id="tokenInput" placeholder="Enter token from URL or generate new one">
-            <button class="auth-button" onclick="validateToken()">Connect</button>
-            <button class="auth-button" onclick="generateToken()">Generate New Token</button>
-            <div id="authMessage"></div>
-        </div>
-
-        <div class="terminal" id="terminal" style="display: none;">
-            <div class="output" id="output">
-                <div class="success">Forgecode Gateway v0.1.0</div>
-                <div>Type 'help' for available commands</div>
-                <br>
+            <h2>Authentication</h2>
+            <div class="status" id="authStatus">
+                Please generate a token to access the gateway.
             </div>
-            <div class="input-line">
-                <span class="prompt">$</span>
-                <input type="text" class="command-input" id="commandInput" onkeypress="handleCommand(event)">
+            <button class="button" onclick="generateToken()">Generate New Token</button>
+            <div id="tokenInfo" class="hidden">
+                <p><strong>Your Token:</strong> <span id="tokenValue"></span></p>
+                <p><strong>Expires:</strong> <span id="tokenExpiry"></span></p>
+                <button class="button" onclick="validateToken()">Validate Token</button>
+                <button class="button" onclick="renewToken()">Renew Token</button>
+                <button class="button" onclick="connectGateway()">Connect to Gateway</button>
             </div>
         </div>
 
-        <div class="status-bar" id="statusBar" style="display: none;">
-            <div class="token-info">
-                Token: <span id="tokenDisplay"></span> |
-                Expires: <span id="expiryDisplay"></span>
+        <!-- Gateway Section -->
+        <div class="gateway-section hidden" id="gatewaySection">
+            <h2>Gateway Terminal</h2>
+            <div class="status" id="gatewayStatus">
+                Ready to execute commands.
             </div>
+            <div class="terminal" id="terminal"></div>
             <div>
-                <button class="auth-button" onclick="renewToken()">Renew Token</button>
-                <button class="auth-button" onclick="disconnect()">Disconnect</button>
+                <input type="text" id="command" placeholder="Enter command...">
+                <button class="button" onclick="sendCommand()">Execute</button>
             </div>
         </div>
     </div>
 
     <script>
-        let currentToken = '';
-        let wsConnection = null;
+        let currentToken = null;
+        let ws = null;
 
-        function validateToken() {
-            const token = document.getElementById('tokenInput').value.trim();
-            if (!token) {
-                showAuthMessage('Please enter a token', 'error');
-                return;
-            }
-
-            // Simulate token validation
-            fetch('/auth/validate', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ token: token })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.valid) {
-                    currentToken = token;
-                    showTerminal();
-                    connectWebSocket();
-                } else {
-                    showAuthMessage(data.message, 'error');
-                }
-            })
-            .catch(error => {
-                showAuthMessage('Connection error: ' + error, 'error');
-            });
-        }
-
-        function generateToken() {
-            // Simulate token generation
-            const newToken = 'token_' + Math.random().toString(36).substr(2, 9);
-            document.getElementById('tokenInput').value = newToken;
-            showAuthMessage('New token generated. Click Connect to use it.', 'success');
-        }
-
-        function showTerminal() {
-            document.getElementById('authSection').style.display = 'none';
-            document.getElementById('terminal').style.display = 'block';
-            document.getElementById('statusBar').style.display = 'flex';
-            document.getElementById('tokenDisplay').textContent = currentToken.substring(0, 8) + '...';
-            document.getElementById('expiryDisplay').textContent = '1 hour';
-            document.getElementById('commandInput').focus();
-        }
-
-        function connectWebSocket() {
+        // Generate new token
+        async function generateToken() {
             try {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = protocol + '//' + window.location.host + '/ws';
-                wsConnection = new WebSocket(wsUrl);
-
-                wsConnection.onopen = function() {
-                    addOutput('WebSocket connection established', 'success');
-                };
-
-                wsConnection.onmessage = function(event) {
-                    addOutput(event.data, 'output');
-                };
-
-                wsConnection.onclose = function() {
-                    addOutput('WebSocket connection closed', 'error');
-                };
-
-                wsConnection.onerror = function(error) {
-                    addOutput('WebSocket error: ' + error, 'error');
-                };
-            } catch (error) {
-                addOutput('Failed to connect to WebSocket: ' + error, 'error');
-            }
-        }
-
-        function handleCommand(event) {
-            if (event.key === 'Enter') {
-                const command = event.target.value.trim();
-                if (command) {
-                    addOutput('$ ' + command, 'command');
-
-                    // Simulate command execution
-                    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-                        wsConnection.send(command);
-                    } else {
-                        addOutput('Error: Not connected to server', 'error');
+                const response = await fetch('/auth/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
                     }
+                });
 
-                    event.target.value = '';
-                }
-            }
-        }
+                const result = await response.json();
 
-        function addOutput(text, type) {
-            const output = document.getElementById('output');
-            const line = document.createElement('div');
-            line.className = type;
-            line.textContent = text;
-            output.appendChild(line);
-            output.scrollTop = output.scrollHeight;
-        }
-
-        function renewToken() {
-            fetch('/auth/renew', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ token: currentToken })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    addOutput('Token renewed successfully', 'success');
-                    document.getElementById('expiryDisplay').textContent = '1 hour (renewed)';
+                if (result.success) {
+                    currentToken = result.token;
+                    document.getElementById('tokenValue').textContent = result.token;
+                    document.getElementById('tokenExpiry').textContent = result.expires_at;
+                    document.getElementById('tokenInfo').classList.remove('hidden');
+                    document.getElementById('authStatus').textContent = 'Token generated successfully!';
+                    document.getElementById('authStatus').className = 'status';
                 } else {
-                    addOutput('Token renewal failed: ' + data.message, 'error');
+                    throw new Error(result.message);
                 }
-            })
-            .catch(error => {
-                addOutput('Renewal error: ' + error, 'error');
-            });
-        }
-
-        function disconnect() {
-            if (wsConnection) {
-                wsConnection.close();
+            } catch (error) {
+                document.getElementById('authStatus').textContent = 'Error generating token: ' + error.message;
+                document.getElementById('authStatus').className = 'status error';
             }
-            document.getElementById('authSection').style.display = 'block';
-            document.getElementById('terminal').style.display = 'none';
-            document.getElementById('statusBar').style.display = 'none';
-            document.getElementById('output').innerHTML = `
-                <div class="success">Forgecode Gateway v0.1.0</div>
-                <div>Type 'help' for available commands</div>
-                <br>
-            `;
         }
 
-        function showAuthMessage(message, type) {
-            const messageDiv = document.getElementById('authMessage');
-            messageDiv.textContent = message;
-            messageDiv.className = type;
+        // Validate token
+        async function validateToken() {
+            if (!currentToken) return;
+
+            try {
+                const response = await fetch('/auth/validate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ token: currentToken })
+                });
+
+                const result = await response.json();
+
+                if (result.valid) {
+                    document.getElementById('authStatus').textContent = 'Token is valid!';
+                    document.getElementById('authStatus').className = 'status';
+                } else {
+                    document.getElementById('authStatus').textContent = 'Token is invalid: ' + result.message;
+                    document.getElementById('authStatus').className = 'status error';
+                }
+            } catch (error) {
+                document.getElementById('authStatus').textContent = 'Error validating token: ' + error.message;
+                document.getElementById('authStatus').className = 'status error';
+            }
         }
 
-        // Check for token in URL
+        // Renew token
+        async function renewToken() {
+            if (!currentToken) return;
+
+            try {
+                const response = await fetch('/auth/renew', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ token: currentToken })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    currentToken = result.new_token;
+                    document.getElementById('tokenValue').textContent = result.new_token;
+                    document.getElementById('authStatus').textContent = 'Token renewed successfully!';
+                    document.getElementById('authStatus').className = 'status';
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (error) {
+                document.getElementById('authStatus').textContent = 'Error renewing token: ' + error.message;
+                document.getElementById('authStatus').className = 'status error';
+            }
+        }
+
+        // Connect to gateway
+        function connectGateway() {
+            if (!currentToken) return;
+
+            // Show gateway section
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('gatewaySection').classList.remove('hidden');
+
+            // Connect WebSocket
+            ws = new WebSocket(`ws://${window.location.host}/ws?token=${currentToken}`);
+
+            ws.onopen = function() {
+                document.getElementById('gatewayStatus').textContent = 'WebSocket connected. Terminal ready.';
+                document.getElementById('gatewayStatus').className = 'status';
+            };
+
+            ws.onmessage = function(event) {
+                const terminal = document.getElementById('terminal');
+                terminal.innerHTML += event.data + '\n';
+                terminal.scrollTop = terminal.scrollHeight;
+            };
+
+            ws.onerror = function(error) {
+                document.getElementById('gatewayStatus').textContent = 'WebSocket error: ' + error;
+                document.getElementById('gatewayStatus').className = 'status error';
+            };
+
+            ws.onclose = function() {
+                document.getElementById('gatewayStatus').textContent = 'WebSocket disconnected.';
+                document.getElementById('gatewayStatus').className = 'status error';
+            };
+        }
+
+        // Send command to gateway
+        function sendCommand() {
+            const commandInput = document.getElementById('command');
+            const command = commandInput.value.trim();
+
+            if (command && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(command);
+                commandInput.value = '';
+            }
+        }
+
+        // Handle Enter key in command input
+        document.getElementById('command').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendCommand();
+            }
+        });
+
+        // Check if token exists in URL (for direct access)
         const urlParams = new URLSearchParams(window.location.search);
         const urlToken = urlParams.get('token');
+
         if (urlToken) {
-            document.getElementById('tokenInput').value = urlToken;
-            validateToken();
+            currentToken = urlToken;
+            document.getElementById('tokenValue').textContent = urlToken;
+            document.getElementById('tokenInfo').classList.remove('hidden');
+            document.getElementById('authStatus').textContent = 'Token loaded from URL. Click "Connect to Gateway" to proceed.';
+            document.getElementById('authStatus').className = 'status';
         }
     </script>
 </body>

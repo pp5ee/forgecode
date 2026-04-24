@@ -88,3 +88,12 @@ pub async fn generate_token(
         "expires_at": token.expires_at.to_rfc3339()
     }))
 }
+
+/// Serve the main index page with token validation
+pub async fn serve_index() -> impl Responder {
+    // This handler is called after middleware validation
+    // Redirect to the static index.html file
+    HttpResponse::TemporaryRedirect()
+        .append_header(("Location", "/static/index.html"))
+        .finish()
+}
