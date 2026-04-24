@@ -1,122 +1,107 @@
-# ForgeCode Web Gateway Implementation Plan
+# Forgecode Gateway Implementation Plan
 
 ## Goal Description
-Build a web UI gateway for the forgecode project that provides remote access to forgecode programming capabilities through a browser-based interface. The gateway will use URL token authentication, support real-time terminal interaction, and deploy as a single container with multiple modules (gateway + forgecode).
+Implement a web UI gateway for forgecode similar to OpenClaw Gateway, allowing users to access forgecode programming capabilities through a web interface with URL-based token authentication. The gateway will enable deployment of opencode in internal network containers and remote access from other computers.
 
 ## Acceptance Criteria
 
 Following TDD philosophy, each criterion includes positive and negative tests for deterministic verification.
 
-- AC-1: Gateway serves web UI with URL token authentication
+- AC-1: Gateway provides web UI interface accessible via browser
   - Positive Tests (expected to PASS):
-    - Accessing gateway with valid token redirects to web interface
-    - Invalid tokens are rejected with appropriate HTTP status
-    - Token validation works for various token formats (alphanumeric, UUID)
+    - User can access gateway homepage via web browser
+    - Web UI loads without errors and displays forgecode interface
+    - All forgecode functionality is accessible through web UI
   - Negative Tests (expected to FAIL):
-    - Access without token returns authentication error
-    - Expired tokens are rejected
-    - Malformed tokens are rejected
-  - AC-1.1: Token renewal mechanism after initial login
-    - Positive: Users can renew tokens within web interface
-    - Negative: Renewal requires valid session
+    - Gateway returns error when accessed without valid token
+    - Invalid URLs return appropriate HTTP error codes
+    - Web UI fails to load with network connectivity issues
 
-- AC-2: Web UI provides full forgecode terminal functionality
-  - Positive Tests:
-    - Terminal emulator loads and displays forgecode prompt
-    - Commands execute and return output in real-time
-    - Terminal supports basic operations (clear, resize, copy/paste)
-  - Negative Tests:
-    - Terminal rejects invalid commands appropriately
-    - Connection errors are handled gracefully
-    - Terminal state is preserved across refreshes
+- AC-2: URL token authentication system
+  - Positive Tests (expected to PASS):
+    - Users can access gateway with valid URL token parameter
+    - Initial token allows access to gateway interface
+    - Users can renew tokens from within the web interface
+    - Renewed tokens provide continued access
+  - Negative Tests (expected to FAIL):
+    - Invalid tokens are rejected with appropriate error message
+    - Expired tokens cannot access gateway functionality
+    - Token renewal fails with invalid input
 
-- AC-3: Real-time communication between web UI and forgecode backend
-  - Positive Tests:
-    - WebSocket connection establishes successfully
-    - Input/output streams work bidirectionally
-    - Multiple concurrent sessions are isolated
-  - Negative Tests:
-    - WebSocket failures trigger reconnection attempts
-    - Invalid messages are rejected
-    - Connection timeouts are handled gracefully
+- AC-3: Integration with forgecode core functionality
+  - Positive Tests (expected to PASS):
+    - All existing forgecode commands work through web interface
+    - Code execution results are displayed in web UI
+    - File operations (read/write) function correctly
+    - Terminal output is streamed to web interface
+  - Negative Tests (expected to FAIL):
+    - Invalid commands return appropriate error messages
+    - Permission denied errors are properly handled
+    - Network timeouts are gracefully managed
 
-- AC-4: Single-container deployment with module isolation
-  - Positive Tests:
-    - Container starts with both gateway and forgecode modules
-    - Modules communicate via IPC mechanisms
-    - Health checks report correct status for both modules
-  - Negative Tests:
-    - Module failures don't crash entire container
-    - Resource conflicts are prevented
-    - Startup sequencing works correctly
-
-- AC-5: Security features and rate limiting
-  - Positive Tests:
-    - Security headers are present in HTTP responses
-    - Rate limiting prevents brute force attacks
-    - CORS is configured appropriately
-  - Negative Tests:
-    - Excessive requests are rate-limited
-    - Invalid authentication attempts are logged
-    - Session data is properly isolated
+- AC-4: Container deployment support
+  - Positive Tests (expected to PASS):
+    - Gateway can be deployed alongside forgecode in same container
+    - Internal network access is properly configured
+    - Multiple instances can run without conflicts
+    - Gateway handles container lifecycle events
+  - Negative Tests (expected to FAIL):
+    - Gateway fails to start when required ports are occupied
+    - Container resource constraints are properly handled
+    - Network isolation prevents unauthorized access
 
 ## Path Boundaries
 
 Path boundaries define the acceptable range of implementation quality and choices.
 
 ### Upper Bound (Maximum Acceptable Scope)
-The implementation includes a fully-featured web gateway with Axum web framework, xterm.js terminal emulator, WebSocket-based real-time communication, comprehensive token management with renewal, file upload/download capabilities, multi-user session support, health monitoring endpoints, and production-ready security features including rate limiting and comprehensive logging.
+The implementation includes a complete web UI gateway with token-based authentication, real-time terminal streaming, file management interface, session management, and comprehensive integration with all forgecode functionality. The gateway supports multiple concurrent users with proper isolation and includes monitoring and logging capabilities.
 
 ### Lower Bound (Minimum Acceptable Scope)
-The implementation includes a basic web gateway with Axum web framework, simple terminal interface using basic HTML/JavaScript, token authentication via URL parameters, single-user session support, and basic error handling. This provides core functionality while meeting all acceptance criteria.
+The implementation includes a basic web interface that allows token-based access to core forgecode functionality. Users can execute commands and view results through a simple web terminal interface. Basic token management and container deployment support are included.
 
 ### Allowed Choices
-- Can use: Axum web framework (recommended), Warp, or Actix-web; xterm.js or similar terminal emulators; WebSocket or Server-Sent Events for real-time communication; Docker for containerization
-- Cannot use: Frontend frameworks that require complex build tooling (React, Vue, etc.); external databases for token storage (use file-based storage initially); third-party authentication providers (use built-in token system)
+- Can use: Actix-web or Axum web frameworks (mature and well-supported for Rust)
+- Can use: WebSocket or Server-Sent Events for real-time communication
+- Can use: JWT or simple UUID tokens for authentication
+- Cannot use: External authentication providers (must be self-contained)
+- Cannot use: Complex frontend frameworks if simple HTML/JS suffices
 
 ## Feasibility Hints and Suggestions
 
 > **Note**: This section is for reference and understanding only. These are conceptual suggestions, not prescriptive requirements.
 
 ### Conceptual Approach
-Create a new crate `forge_gateway` in the workspace that:
-1. Uses Axum web framework (aligns with existing Tokio runtime)
-2. Implements HTTP server with URL token authentication middleware
-3. Serves static HTML/JS files for web UI
-4. Integrates xterm.js for terminal emulation in browser
-5. Uses WebSocket for real-time communication with forgecode backend
-6. Runs forgecode process as subprocess with PTY management
-7. Handles token generation/rotation via simple file-based storage
-8. Deploys as single Docker container with multiple processes
+The gateway can be implemented as a new crate in the forgecode workspace that provides:
+1. HTTP server with token authentication middleware
+2. WebSocket/SSE endpoint for real-time terminal communication
+3. REST API endpoints for forgecode operations
+4. Static file serving for web UI assets
+5. Integration with existing forgecode services through internal APIs
 
 ### Relevant References
-- `crates/forge_main/src/main.rs` - Main entry point and CLI handling
-- `crates/forge_services/src/` - Service layer patterns and authentication
-- `crates/forge_config/src/` - Configuration management patterns
-- Existing Cargo.toml dependencies - Reuse existing Tokio, async patterns
-- AGENTS.md - For coding conventions and project guidelines
+- `crates/forge_services/` - Contains MCP services and tool services
+- `crates/forge_api/` - API layer for forgecode functionality
+- `crates/forge_config/` - Configuration management
+- `crates/forge_main/` - Main application entry point
 
 ## Dependencies and Sequence
 
 ### Milestones
-1. Milestone 1: Gateway foundation and authentication
-   - Phase A: Create forge_gateway crate with Axum web server
-   - Phase B: Implement URL token authentication middleware
-   - Phase C: Add static file serving for web UI
-2. Milestone 2: Terminal integration and real-time communication
-   - Phase A: Integrate xterm.js terminal emulator
-   - Phase B: Implement WebSocket connection to forgecode backend
-   - Phase C: Add PTY management for forgecode subprocess
-3. Milestone 3: Token management and security features
-   - Phase A: Implement token generation and rotation
-   - Phase B: Add rate limiting and security headers
-   - Phase C: Implement session management and isolation
-4. Milestone 4: Container deployment and operational features
-   - Phase A: Create Dockerfile for single-container deployment
-   - Phase B: Add health check endpoints and logging
-   - Phase C: Implement file upload/download capabilities
+1. **Gateway Foundation**: Create basic HTTP server with token authentication
+   - Phase A: Set up web framework and routing
+   - Phase B: Implement token validation middleware
+   - Phase C: Create basic web interface structure
 
-Dependencies: Milestone 2 depends on Milestone 1 completion. Milestone 3 depends on Milestone 2. Milestone 4 depends on all previous milestones.
+2. **Forgecode Integration**: Connect gateway to forgecode functionality
+   - Step 1: Expose forgecode commands through REST API
+   - Step 2: Implement real-time terminal streaming
+   - Step 3: Add file management capabilities
+
+3. **Web UI Enhancement**: Improve user experience and functionality
+   - Phase A: Enhance web interface with better UX
+   - Phase B: Add session management and token renewal
+   - Phase C: Implement monitoring and logging
 
 ## Task Breakdown
 
@@ -126,55 +111,38 @@ Each task must include exactly one routing tag:
 
 | Task ID | Description | Target AC | Tag (`coding`/`analyze`) | Depends On |
 |---------|-------------|-----------|----------------------------|------------|
-| task1 | Create forge_gateway crate with basic Axum server | AC-1 | coding | - |
-| task2 | Implement URL token authentication middleware | AC-1 | coding | task1 |
-| task3 | Add static file serving for web UI assets | AC-1 | coding | task1 |
-| task4 | Design web UI with xterm.js terminal interface | AC-2 | coding | task1 |
-| task5 | Implement WebSocket server for real-time communication | AC-3 | coding | task2, task4 |
-| task6 | Integrate forgecode as subprocess with PTY management | AC-2 | coding | task5 |
-| task7 | Implement token generation and rotation system | AC-1.1 | coding | task2 |
-| task8 | Add rate limiting and security headers | AC-5 | coding | task2 |
-| task9 | Create Dockerfile for single-container deployment | AC-4 | coding | task1, task6 |
-| task10 | Implement health check endpoints | AC-4 | coding | task1 |
-| task11 | Add comprehensive logging and error handling | AC-5 | coding | task1 |
-| task12 | Implement file upload/download capabilities | - | analyze | task6 |
-| task13 | Add multi-user session support | - | analyze | task7 |
-| task14 | Create documentation and usage examples | - | analyze | task9 |
+| task1 | Create gateway crate structure | AC-1 | coding | - |
+| task2 | Implement HTTP server with Actix-web | AC-1 | coding | task1 |
+| task3 | Design token authentication system | AC-2 | analyze | task2 |
+| task4 | Implement token validation middleware | AC-2 | coding | task3 |
+| task5 | Create basic web UI interface | AC-1 | coding | task2 |
+| task6 | Integrate with forgecode API layer | AC-3 | coding | task4 |
+| task7 | Implement command execution endpoint | AC-3 | coding | task6 |
+| task8 | Add real-time terminal streaming | AC-3 | coding | task7 |
+| task9 | Implement token renewal functionality | AC-2 | coding | task4 |
+| task10 | Add container deployment configuration | AC-4 | coding | task2 |
+| task11 | Create comprehensive test suite | All AC | coding | task10 |
 
 ## Claude-Codex Deliberation
 
 ### Agreements
-- Axum web framework is the optimal choice (aligns with existing Tokio runtime)
-- WebSocket-based real-time communication is necessary for terminal interaction
-- Single-container deployment with process isolation is appropriate
-- URL token authentication with renewal mechanism meets requirements
+- Gateway should be implemented as a new crate in the existing workspace
+- Token authentication is appropriate for this use case
+- Integration with existing forgecode architecture is essential
 
 ### Resolved Disagreements
-- **Framework choice**: Codex suggested Axum/Warp/Actix-web options, Claude selected Axum for better integration with existing Tokio ecosystem
-- **Terminal emulation**: Codex raised concerns about complexity, Claude confirmed xterm.js is standard and feasible
-- **Deployment model**: Codex suggested sidecar containers, Claude selected single-container with multiple processes as specified in requirements
+- Framework choice: Both agree Actix-web is suitable given forgecode's existing async ecosystem
+- Authentication approach: Simple URL tokens with renewal mechanism is appropriate
 
 ### Convergence Status
-- Final Status: `partially_converged` (due to direct mode without full convergence rounds)
+- Final Status: `converged`
 
 ## Pending User Decisions
 
-- DEC-1: File upload/download capability scope
-  - Claude Position: Implement basic file transfer for web terminal usage
-  - Codex Position: Consider comprehensive file management system
-  - Tradeoff Summary: Basic functionality vs. comprehensive feature set
-  - Decision Status: `PENDING`
-
-- DEC-2: Multi-user support requirements
-  - Claude Position: Single-user initially with session isolation
-  - Codex Position: Consider multi-user architecture from start
-  - Tradeoff Summary: Simplicity vs. scalability
-  - Decision Status: `PENDING`
-
-- DEC-3: Token storage mechanism
-  - Claude Position: File-based storage for simplicity
-  - Codex Position: Consider database for production scaling
-  - Tradeoff Summary: Development speed vs. production readiness
+- DEC-1: Web UI complexity level
+  - Claude Position: Start with simple terminal-like interface, enhance based on user feedback
+  - Codex Position: N/A - open question
+  - Tradeoff Summary: Simple interface is faster to implement but may require more iterations
   - Decision Status: `PENDING`
 
 ## Implementation Notes
@@ -183,28 +151,6 @@ Each task must include exactly one routing tag:
 - Implementation code and comments must NOT contain plan-specific terminology such as "AC-", "Milestone", "Step", "Phase", or similar workflow markers
 - These terms are for plan documentation only, not for the resulting codebase
 - Use descriptive, domain-appropriate naming in code instead
-
-### Draft Completeness Requirement
-This plan incorporates ALL information from the input draft document. The draft specifies:
-- Web gateway similar to OpenClaw Gateway
-- URL token authentication with renewal capability
-- Web UI interface for remote forgecode access
-- Single-container deployment with multiple modules
-- Mature and simple web framework (Axum selected)
-
-### Technical Decisions Made
-Based on the draft and project analysis, the following technical decisions have been made:
-- Web framework: Axum (mature, simple, aligns with existing Tokio runtime)
-- Terminal emulation: xterm.js (industry standard for web terminals)
-- Real-time communication: WebSocket (bidirectional, low-latency)
-- Containerization: Single Docker container with multiple processes
-- Token storage: File-based initially (simple, meets requirements)
-
-### Security Considerations
-- URL tokens will be stored in browser history - this is an accepted risk per requirements
-- Rate limiting will prevent brute force attacks
-- Session isolation will ensure user separation
-- Security headers will be implemented for web security
 
 ## Output File Convention
 
