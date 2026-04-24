@@ -1,0 +1,50 @@
+# Git files
+.git
+.gitignore
+.gitmodules
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Cargo files
+Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Configuration files (except templates)
+config/*.toml
+!config/*.template.toml
+
+# SSL certificates (should be mounted)
+nginx/ssl/
+
+# Documentation (not needed in container)
+docs/
+*.md
+
+# Test files
+**/tests/
+**/*_test.rs
+
+# Development scripts
+deploy.sh
+
+# Docker Compose files
+docker-compose*.yml

@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: forgecode
+
+resources:
+- namespace.yaml
+- deployment.yaml
+- service.yaml
+- ingress.yaml
+
+commonLabels:
+  app: forgecode-gateway
+  environment: production
+
+images:
+- name: forgecode-gateway
+  newName: registry.example.com/forgecode/gateway
+  newTag: latest
+
+configMapGenerator:
+- name: forgecode-gateway-config
+  files:
+  - config/gateway.production.toml
+
+secretGenerator:
+- name: forgecode-gateway-secrets
+  files:
+  - secrets/auth-secret-key
+  - secrets/forgecode-api-key
+
+patchesStrategicMerge:
+- |
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: forgecode-gateway
+  spec:
+    template:
+      spec:
+        containers:
+        - name: forgecode-gateway
+          envFrom:
+          - secretRef:
+              name: forgecode-gateway-secrets

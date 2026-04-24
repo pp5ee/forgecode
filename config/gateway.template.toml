@@ -1,0 +1,82 @@
+# Forgecode Gateway Configuration Template
+# Copy this file to config/gateway.{environment}.toml and update the values
+
+[server]
+# Network interface to bind to
+bind_address = "0.0.0.0"
+# Port to listen on
+port = 8080
+# Maximum number of concurrent connections
+max_connections = 1000
+# Request timeout in seconds
+request_timeout = 30
+
+[auth]
+# JWT token expiration time in hours
+token_expiry_hours = 24
+# Secret key for JWT token signing (change this in production!)
+secret_key = "your-secret-key-here"
+# Token renewal grace period in hours
+renewal_grace_hours = 1
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+# Log format: text, json
+format = "json"
+# Enable logging to file
+file_enabled = true
+# Log file path
+file_path = "logs/gateway.log"
+# Maximum log file size in MB
+max_file_size = 100
+# Number of backup files to keep
+backup_count = 5
+
+[forgecode]
+# Forgecode API endpoint
+api_url = "http://forgecode-api:3000"
+# API key for forgecode services (if required)
+api_key = ""
+# Connection timeout in seconds
+connection_timeout = 10
+# Request timeout in seconds
+request_timeout = 30
+
+[redis]
+# Redis connection string
+url = "redis://redis:6379"
+# Connection pool size
+pool_size = 10
+# Connection timeout in seconds
+connection_timeout = 5
+
+[security]
+# Enable CORS
+cors_enabled = true
+# Allowed origins (comma-separated)
+cors_allowed_origins = "*"
+# Rate limiting enabled
+rate_limiting_enabled = true
+# Maximum requests per minute per IP
+max_requests_per_minute = 100
+# Maximum requests per hour per IP
+max_requests_per_hour = 1000
+
+[websocket]
+# Maximum number of concurrent WebSocket connections
+max_connections = 100
+# Ping interval in seconds
+ping_interval = 30
+# Ping timeout in seconds
+ping_timeout = 10
+# Maximum message size in bytes
+max_message_size = 1048576
+
+[static]
+# Static files directory
+directory = "static"
+# Cache control header for static files
+cache_control = "public, max-age=3600"
+# Enable gzip compression for static files
+gzip_enabled = true

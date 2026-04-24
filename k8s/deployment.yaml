@@ -1,0 +1,178 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forgecode-gateway
+  namespace: forgecode
+  labels:
+    app: forgecode-gateway
+    component: gateway
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: forgecode-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: forgecode-gateway
+        component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: forgecode-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: forgecode-gateway
+        image: forgecode-gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: BIND_ADDRESS
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8080"
+        - name: CONFIG_FILE
+          value: "/app/config/gateway.production.toml"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+        - name: logs-volume
+          mountPath: /app/logs
+        - name: data-volume
+          mountPath: /app/data
+      volumes:
+      - name: config-volume
+        configMap:
+          name: forgecode-gateway-config
+      - name: logs-volume
+        emptyDir: {}
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: forgecode-gateway-data
+      imagePullSecrets:
+      - name: docker-registry-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forgecode-gateway
+  namespace: forgecode
+  labels:
+    app: forgecode-gateway
+    component: gateway
+spec:
+  selector:
+    app: forgecode-gateway
+  ports:
+  - port: 8080
+    targetPort: http
+    protocol: TCP
+    name: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forgecode-gateway-config
+  namespace: forgecode
+data:
+  gateway.production.toml: |
+    [server]
+    bind_address = "0.0.0.0"
+    port = 8080
+    max_connections = 1000
+    request_timeout = 30
+
+    [auth]
+    token_expiry_hours = 24
+    secret_key = "change-this-in-production"
+    renewal_grace_hours = 1
+
+    [logging]
+    level = "info"
+    format = "json"
+    file_enabled = true
+    file_path = "logs/gateway.log"
+    max_file_size = 100
+    backup_count = 5
+
+    [forgecode]
+    api_url = "http://forgecode-api:3000"
+    api_key = ""
+    connection_timeout = 10
+    request_timeout = 30
+
+    [redis]
+    url = "redis://redis:6379"
+    pool_size = 10
+    connection_timeout = 5
+
+    [security]
+    cors_enabled = true
+    cors_allowed_origins = "*"
+    rate_limiting_enabled = true
+    max_requests_per_minute = 100
+    max_requests_per_hour = 1000
+
+    [websocket]
+    max_connections = 100
+    ping_interval = 30
+    ping_timeout = 10
+    max_message_size = 1048576
+
+    [static]
+    directory = "static"
+    cache_control = "public, max-age=3600"
+    gzip_enabled = true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: forgecode-gateway-data
+  namespace: forgecode
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
