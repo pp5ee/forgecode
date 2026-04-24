@@ -44,5 +44,3 @@ To test the gateway:
 
 ## BitLesson Delta
 Action: add
-
-Added BitLesson entry for gateway authentication token management (GATEWAY-AUTH-001).
