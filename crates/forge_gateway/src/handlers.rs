@@ -43,12 +43,11 @@ pub async fn validate_token(
 ) -> impl Responder {
     let token = &token_request.token;
 
-    let validation = token_manager.lock().unwrap().validate_token(token);
+    let is_valid = token_manager.lock().unwrap().validate_token(token);
 
     HttpResponse::Ok().json(json!({
-        "valid": validation.valid,
-        "message": validation.message,
-        "token_id": validation.token_id
+        "valid": is_valid,
+        "message": if is_valid { "Token is valid" } else { "Token is invalid" }
     }))
 }
 
@@ -60,11 +59,17 @@ pub async fn renew_token(
     let token = &renew_request.token;
 
     let mut manager = token_manager.lock().unwrap();
-    if let Some(renewed_token) = manager.renew_token(token) {
+
+    // Check if token is valid
+    if manager.validate_token(token) {
+        // Revoke the old token and generate a new one
+        manager.revoke_token(token);
+        let new_token = manager.generate_token();
+
         HttpResponse::Ok().json(json!({
             "success": true,
             "message": "Token renewed successfully",
-            "new_token": renewed_token.token
+            "new_token": new_token
         }))
     } else {
         HttpResponse::BadRequest().json(json!({
@@ -84,8 +89,7 @@ pub async fn generate_token(
     HttpResponse::Ok().json(json!({
         "success": true,
         "message": "Token generated successfully",
-        "token": token.token,
-        "expires_at": token.expires_at.to_rfc3339()
+        "token": token
     }))
 }
 

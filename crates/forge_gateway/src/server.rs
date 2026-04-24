@@ -6,7 +6,7 @@ use actix_web::{web, App, HttpServer};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
-use crate::{GatewayConfig, handlers, websocket, auth, integration, middleware, Result};
+use crate::{GatewayConfig, handlers, websocket, auth, integration, Result};
 
 /// Start the HTTP server with the given configuration
 pub async fn run_server(config: GatewayConfig) -> Result<()> {
@@ -14,10 +14,8 @@ pub async fn run_server(config: GatewayConfig) -> Result<()> {
 
     info!("Starting HTTP server on {}", bind_addr);
 
-    // Create token manager with configuration
-    let token_manager = web::Data::new(Mutex::new(auth::TokenManager::new(
-        config.token_expiration_seconds,
-    )));
+    // Create token manager
+    let token_manager = web::Data::new(Mutex::new(auth::TokenManager::new()));
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -30,7 +28,7 @@ pub async fn run_server(config: GatewayConfig) -> Result<()> {
             .app_data(token_manager.clone())
             .wrap(cors)
             .wrap(tracing_actix_web::TracingLogger::default())
-            .wrap(auth::UrlTokenMiddleware::new())
+            // TODO: Implement URL token middleware
             // Health check endpoint (public)
             .route("/health", web::get().to(handlers::health_check))
             // Authentication endpoints (public)
