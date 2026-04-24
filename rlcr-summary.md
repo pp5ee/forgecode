@@ -43,7 +43,5 @@ To test the gateway:
 4. Execute commands through the real-time terminal
 
 ## BitLesson Delta
-- Action: none
-- Lesson ID(s): NONE
-- Notes: No changes to BitLesson entries in this round
+- none
 
