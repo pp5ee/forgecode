@@ -8,9 +8,11 @@ pub mod server;
 pub mod handlers;
 pub mod websocket;
 pub mod config;
+pub mod integration;
 
 pub use config::GatewayConfig;
 pub use server::run_server;
+pub use integration::GatewayIntegration;
 
 /// Gateway-specific errors
 #[derive(Debug, thiserror::Error)]
