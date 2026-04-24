@@ -1,0 +1,30 @@
+[package]
+name = "forge_gateway"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+
+[dependencies]
+actix-web = { workspace = true }
+actix-cors = { workspace = true }
+actix-files = { workspace = true }
+actix-rt = { workspace = true }
+
+# Forgecode dependencies
+forge_api = { workspace = true }
+forge_services = { workspace = true }
+forge_config = { workspace = true }
+
+# Core dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+actix-http-test = "3.3"
+tokio-test = "0.4"

@@ -139,6 +139,15 @@ async-openai = { version = "0.34.0", default-features = false, features = ["resp
 gix = "0.81"
 google-cloud-auth = "1.8.0" # Google Cloud authentication with automatic token refresh
 
+# Web framework dependencies for gateway
+actix-web = "4.7"
+actix-cors = "0.8"
+actix-files = "0.7"
+actix-rt = "2.12"
+actix-web-actors = "4.4"
+tracing-actix-web = "0.7"
+chrono = { version = "0.4.44", features = ["serde"] }
+
 # Internal crates
 forge_embed = { path = "crates/forge_embed" }
 forge_api = { path = "crates/forge_api" }
@@ -161,6 +170,6 @@ forge_walker = { path = "crates/forge_walker" }
 forge_json_repair = { path = "crates/forge_json_repair" }
 forge_select = { path = "crates/forge_select" }
 forge_test_kit = { path = "crates/forge_test_kit" }
-
 forge_markdown_stream = { path = "crates/forge_markdown_stream" }
 forge_config = { path = "crates/forge_config" }
+forge_gateway = { path = "crates/forge_gateway" }

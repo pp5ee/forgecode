@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forgecode Gateway</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #007acc;
+            padding-bottom: 20px;
+        }
+
+        .terminal {
+            background-color: #000;
+            border: 1px solid #007acc;
+            border-radius: 5px;
+            padding: 20px;
+            min-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+
+        .input-line {
+            display: flex;
+            align-items: center;
+            margin-top: 10px;
+        }
+
+        .prompt {
+            color: #00ff00;
+            margin-right: 10px;
+        }
+
+        .command-input {
+            background: transparent;
+            border: none;
+            color: #d4d4d4;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            width: 100%;
+            outline: none;
+        }
+
+        .output {
+            color: #d4d4d4;
+            white-space: pre-wrap;
+        }
+
+        .error {
+            color: #f44747;
+        }
+
+        .success {
+            color: #00ff00;
+        }
+
+        .status-bar {
+            background-color: #007acc;
+            color: white;
+            padding: 10px;
+            border-radius: 0 0 5px 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .token-info {
+            font-size: 12px;
+        }
+
+        .auth-section {
+            background-color: #2d2d30;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .auth-input {
+            background-color: #3c3c3c;
+            border: 1px solid #007acc;
+            color: #d4d4d4;
+            padding: 10px;
+            border-radius: 3px;
+            width: 300px;
+            margin-right: 10px;
+        }
+
+        .auth-button {
+            background-color: #007acc;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .auth-button:hover {
+            background-color: #005a9e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Forgecode Gateway</h1>
+            <p>Web interface for forgecode programming environment</p>
+        </div>
+
+        <div class="auth-section" id="authSection">
+            <h3>Authentication</h3>
+            <p>Enter your access token to continue:</p>
+            <input type="text" class="auth-input" id="tokenInput" placeholder="Enter token from URL or generate new one">
+            <button class="auth-button" onclick="validateToken()">Connect</button>
+            <button class="auth-button" onclick="generateToken()">Generate New Token</button>
+            <div id="authMessage"></div>
+        </div>
+
+        <div class="terminal" id="terminal" style="display: none;">
+            <div class="output" id="output">
+                <div class="success">Forgecode Gateway v0.1.0</div>
+                <div>Type 'help' for available commands</div>
+                <br>
+            </div>
+            <div class="input-line">
+                <span class="prompt">$</span>
+                <input type="text" class="command-input" id="commandInput" onkeypress="handleCommand(event)">
+            </div>
+        </div>
+
+        <div class="status-bar" id="statusBar" style="display: none;">
+            <div class="token-info">
+                Token: <span id="tokenDisplay"></span> |
+                Expires: <span id="expiryDisplay"></span>
+            </div>
+            <div>
+                <button class="auth-button" onclick="renewToken()">Renew Token</button>
+                <button class="auth-button" onclick="disconnect()">Disconnect</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentToken = '';
+        let wsConnection = null;
+
+        function validateToken() {
+            const token = document.getElementById('tokenInput').value.trim();
+            if (!token) {
+                showAuthMessage('Please enter a token', 'error');
+                return;
+            }
+
+            // Simulate token validation
+            fetch('/auth/validate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ token: token })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.valid) {
+                    currentToken = token;
+                    showTerminal();
+                    connectWebSocket();
+                } else {
+                    showAuthMessage(data.message, 'error');
+                }
+            })
+            .catch(error => {
+                showAuthMessage('Connection error: ' + error, 'error');
+            });
+        }
+
+        function generateToken() {
+            // Simulate token generation
+            const newToken = 'token_' + Math.random().toString(36).substr(2, 9);
+            document.getElementById('tokenInput').value = newToken;
+            showAuthMessage('New token generated. Click Connect to use it.', 'success');
+        }
+
+        function showTerminal() {
+            document.getElementById('authSection').style.display = 'none';
+            document.getElementById('terminal').style.display = 'block';
+            document.getElementById('statusBar').style.display = 'flex';
+            document.getElementById('tokenDisplay').textContent = currentToken.substring(0, 8) + '...';
+            document.getElementById('expiryDisplay').textContent = '1 hour';
+            document.getElementById('commandInput').focus();
+        }
+
+        function connectWebSocket() {
+            try {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = protocol + '//' + window.location.host + '/ws';
+                wsConnection = new WebSocket(wsUrl);
+
+                wsConnection.onopen = function() {
+                    addOutput('WebSocket connection established', 'success');
+                };
+
+                wsConnection.onmessage = function(event) {
+                    addOutput(event.data, 'output');
+                };
+
+                wsConnection.onclose = function() {
+                    addOutput('WebSocket connection closed', 'error');
+                };
+
+                wsConnection.onerror = function(error) {
+                    addOutput('WebSocket error: ' + error, 'error');
+                };
+            } catch (error) {
+                addOutput('Failed to connect to WebSocket: ' + error, 'error');
+            }
+        }
+
+        function handleCommand(event) {
+            if (event.key === 'Enter') {
+                const command = event.target.value.trim();
+                if (command) {
+                    addOutput('$ ' + command, 'command');
+
+                    // Simulate command execution
+                    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                        wsConnection.send(command);
+                    } else {
+                        addOutput('Error: Not connected to server', 'error');
+                    }
+
+                    event.target.value = '';
+                }
+            }
+        }
+
+        function addOutput(text, type) {
+            const output = document.getElementById('output');
+            const line = document.createElement('div');
+            line.className = type;
+            line.textContent = text;
+            output.appendChild(line);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function renewToken() {
+            fetch('/auth/renew', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ token: currentToken })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    addOutput('Token renewed successfully', 'success');
+                    document.getElementById('expiryDisplay').textContent = '1 hour (renewed)';
+                } else {
+                    addOutput('Token renewal failed: ' + data.message, 'error');
+                }
+            })
+            .catch(error => {
+                addOutput('Renewal error: ' + error, 'error');
+            });
+        }
+
+        function disconnect() {
+            if (wsConnection) {
+                wsConnection.close();
+            }
+            document.getElementById('authSection').style.display = 'block';
+            document.getElementById('terminal').style.display = 'none';
+            document.getElementById('statusBar').style.display = 'none';
+            document.getElementById('output').innerHTML = `
+                <div class="success">Forgecode Gateway v0.1.0</div>
+                <div>Type 'help' for available commands</div>
+                <br>
+            `;
+        }
+
+        function showAuthMessage(message, type) {
+            const messageDiv = document.getElementById('authMessage');
+            messageDiv.textContent = message;
+            messageDiv.className = type;
+        }
+
+        // Check for token in URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlToken = urlParams.get('token');
+        if (urlToken) {
+            document.getElementById('tokenInput').value = urlToken;
+            validateToken();
+        }
+    </script>
+</body>
+</html>
