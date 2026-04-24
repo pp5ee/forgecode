@@ -54,21 +54,28 @@ impl ForgeService {
 
         match api_guard.as_ref() {
             Some(api) => {
-                // Simulate command execution - in a real implementation, this would
-                // call the appropriate forgecode service methods
-                let output = format!("Executing command: {}\n", command);
-
-                // Simulate different command responses
-                if command.contains("help") {
-                    Ok(format!("{}Available commands: help, status, version, config", output))
-                } else if command.contains("status") {
-                    Ok(format!("{}Forgecode gateway is running. Services: OK", output))
-                } else if command.contains("version") {
-                    Ok(format!("{}Forgecode Gateway v{}", output, env!("CARGO_PKG_VERSION")))
-                } else if command.contains("config") {
-                    Ok(format!("{}Gateway configuration loaded successfully", output))
+                // Use real forgecode API methods based on command type
+                if command.starts_with("help") || command.trim().is_empty() {
+                    Ok(self.get_help_text().await)
+                } else if command.starts_with("status") {
+                    self.get_system_status(api).await
+                } else if command.starts_with("version") {
+                    Ok(format!("Forgecode Gateway v{}", env!("CARGO_PKG_VERSION")))
+                } else if command.starts_with("config") {
+                    self.get_config_info(api).await
+                } else if command.starts_with("agents") {
+                    self.list_agents(api).await
+                } else if command.starts_with("tools") {
+                    self.list_tools(api).await
+                } else if command.starts_with("models") {
+                    self.list_models(api).await
+                } else if command.starts_with("conversations") {
+                    self.list_conversations(api).await
+                } else if command.starts_with("workspaces") {
+                    self.list_workspaces(api).await
                 } else {
-                    Ok(format!("{}Unknown command: {}", output, command))
+                    // Try to execute as a shell command
+                    self.execute_shell_command(api, command).await
                 }
             }
             None => Err("Forgecode API not initialized".to_string()),
@@ -86,6 +93,181 @@ impl ForgeService {
         match std::fs::read_to_string(&file_path) {
             Ok(content) => Ok(content),
             Err(e) => Err(format!("Failed to read file {}: {}", path, e)),
+        }
+    }
+
+    // Helper methods for real forgecode integration
+
+    async fn get_help_text(&self) -> String {
+        r#"Available ForgeCode Gateway Commands:
+
+Basic Commands:
+  help              - Show this help message
+  status            - Show system status and services
+  version           - Show gateway version
+  config            - Show configuration information
+
+ForgeCode Services:
+  agents            - List available agents
+  tools             - List available tools
+  models            - List available models
+  conversations     - List recent conversations
+  workspaces        - List available workspaces
+
+System Commands:
+  <shell command>   - Execute shell commands in the workspace
+
+Use 'help <command>' for more information on a specific command."#.to_string()
+    }
+
+    async fn get_system_status(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.get_agents().await {
+            Ok(agents) => {
+                let agent_count = agents.len();
+                match api.get_tools().await {
+                    Ok(tools) => {
+                        let tool_count = tools.tools.len();
+                        match api.get_models().await {
+                            Ok(models) => {
+                                let model_count = models.len();
+                                Ok(format!(
+                                    "ForgeCode Gateway Status:\n\n".to_string() +
+                                    "Services: RUNNING\n" +
+                                    "Agents: {} available\n" +
+                                    "Tools: {} available\n" +
+                                    "Models: {} available\n" +
+                                    "\nAll systems operational.",
+                                    agent_count, tool_count, model_count
+                                ))
+                            }
+                            Err(e) => Err(format!("Failed to get models: {}", e)),
+                        }
+                    }
+                    Err(e) => Err(format!("Failed to get tools: {}", e)),
+                }
+            }
+            Err(e) => Err(format!("Failed to get agents: {}", e)),
+        }
+    }
+
+    async fn get_config_info(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.get_session_config().await {
+            Some(config) => {
+                Ok(format!(
+                    "Current Session Configuration:\n\n".to_string() +
+                    "Provider: {}\n" +
+                    "Model: {}\n" +
+                    "\nConfiguration loaded successfully.",
+                    config.provider, config.model
+                ))
+            }
+            None => Ok("No active session configuration found.".to_string()),
+        }
+    }
+
+    async fn list_agents(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.get_agents().await {
+            Ok(agents) => {
+                if agents.is_empty() {
+                    Ok("No agents available.".to_string())
+                } else {
+                    let mut output = "Available Agents:\n\n".to_string();
+                    for agent in agents {
+                        output.push_str(&format!("- {}: {}\n", agent.id, agent.name));
+                    }
+                    Ok(output)
+                }
+            }
+            Err(e) => Err(format!("Failed to list agents: {}", e)),
+        }
+    }
+
+    async fn list_tools(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.get_tools().await {
+            Ok(tools) => {
+                if tools.tools.is_empty() {
+                    Ok("No tools available.".to_string())
+                } else {
+                    let mut output = "Available Tools:\n\n".to_string();
+                    for tool in tools.tools {
+                        output.push_str(&format!("- {}: {}\n", tool.name, tool.description));
+                    }
+                    Ok(output)
+                }
+            }
+            Err(e) => Err(format!("Failed to list tools: {}", e)),
+        }
+    }
+
+    async fn list_models(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.get_models().await {
+            Ok(models) => {
+                if models.is_empty() {
+                    Ok("No models available.".to_string())
+                } else {
+                    let mut output = "Available Models:\n\n".to_string();
+                    for model in models {
+                        output.push_str(&format!("- {}\n", model.id));
+                    }
+                    Ok(output)
+                }
+            }
+            Err(e) => Err(format!("Failed to list models: {}", e)),
+        }
+    }
+
+    async fn list_conversations(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.get_conversations(Some(10)).await {
+            Ok(conversations) => {
+                if conversations.is_empty() {
+                    Ok("No recent conversations found.".to_string())
+                } else {
+                    let mut output = "Recent Conversations:\n\n".to_string();
+                    for conv in conversations {
+                        let title = conv.title.unwrap_or_else(|| "Untitled".to_string());
+                        output.push_str(&format!("- {}: {}\n", conv.id, title));
+                    }
+                    Ok(output)
+                }
+            }
+            Err(e) => Err(format!("Failed to list conversations: {}", e)),
+        }
+    }
+
+    async fn list_workspaces(&self, api: &ForgeAPI) -> Result<String, String> {
+        match api.list_workspaces().await {
+            Ok(workspaces) => {
+                if workspaces.is_empty() {
+                    Ok("No workspaces available.".to_string())
+                } else {
+                    let mut output = "Available Workspaces:\n\n".to_string();
+                    for workspace in workspaces {
+                        output.push_str(&format!("- {}: {}\n", workspace.id, workspace.name));
+                    }
+                    Ok(output)
+                }
+            }
+            Err(e) => Err(format!("Failed to list workspaces: {}", e)),
+        }
+    }
+
+    async fn execute_shell_command(&self, api: &ForgeAPI, command: &str) -> Result<String, String> {
+        let cwd = api.environment().cwd.clone();
+        match api.execute_shell_command(command, cwd).await {
+            Ok(output) => {
+                let mut result = format!("Command executed successfully.\n\n");
+                if !output.stdout.is_empty() {
+                    result.push_str(&format!("STDOUT:\n{}\n", output.stdout));
+                }
+                if !output.stderr.is_empty() {
+                    result.push_str(&format!("STDERR:\n{}\n", output.stderr));
+                }
+                if let Some(exit_code) = output.exit_code {
+                    result.push_str(&format!("Exit Code: {}\n", exit_code));
+                }
+                Ok(result)
+            }
+            Err(e) => Err(format!("Failed to execute command: {}", e)),
         }
     }
 
