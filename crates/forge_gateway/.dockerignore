@@ -1,0 +1,38 @@
+# Docker ignore file for Forgecode Gateway
+
+# Git
+.git
+.gitignore
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Configuration files (except production configs)
+config/*.local.toml
+config/*.dev.toml
+
+# Documentation
+docs/
+README.md
+
+# Test files
+tests/
+**/*_test.rs
+
+# Build scripts
+build.rs
