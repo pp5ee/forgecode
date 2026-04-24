@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forgecode-gateway
+  labels:
+    app: forgecode-gateway
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: forgecode-gateway
+  template:
+    metadata:
+      labels:
+        app: forgecode-gateway
+    spec:
+      containers:
+      - name: forgecode-gateway
+        image: forgecode-gateway:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: FORGECODE_GATEWAY_HOST
+          value: "0.0.0.0"
+        - name: FORGECODE_GATEWAY_PORT
+          value: "8080"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forgecode-gateway-service
+spec:
+  selector:
+    app: forgecode-gateway
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: LoadBalancer

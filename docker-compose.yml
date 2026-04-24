@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  forgecode-gateway:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+      - FORGECODE_GATEWAY_HOST=0.0.0.0
+      - FORGECODE_GATEWAY_PORT=8080
+    volumes:
+      - ./static:/app/static:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Example service that forgecode-gateway can interact with
+  example-service:
+    image: nginx:alpine
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: forgecode-network

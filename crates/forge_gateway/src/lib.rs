@@ -9,6 +9,7 @@ pub mod handlers;
 pub mod websocket;
 pub mod config;
 pub mod integration;
+pub mod tests;
 
 pub use config::GatewayConfig;
 pub use server::run_server;

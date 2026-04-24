@@ -9,6 +9,8 @@ actix-web = { workspace = true }
 actix-cors = { workspace = true }
 actix-files = { workspace = true }
 actix-rt = { workspace = true }
+actix-web-httpauth = "0.8"
+urlencoding = "2.1"
 
 # Forgecode dependencies
 forge_api = { workspace = true }

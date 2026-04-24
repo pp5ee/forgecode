@@ -30,6 +30,7 @@ pub async fn run_server(config: GatewayConfig) -> Result<()> {
             .app_data(token_manager.clone())
             .wrap(cors)
             .wrap(tracing_actix_web::TracingLogger::default())
+            .wrap(auth::UrlTokenMiddleware::new())
             // Health check endpoint (public)
             .route("/health", web::get().to(handlers::health_check))
             // Authentication endpoints (public)

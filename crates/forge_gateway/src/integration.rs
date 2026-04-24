@@ -61,38 +61,75 @@ where
 
     /// Execute a shell command through forgecode
     pub async fn execute_command(&self, request: CommandRequest) -> Result<CommandResponse, ApiError> {
-        // TODO: Implement actual command execution using forge_services
-        // For now, return a mock response
-        Ok(CommandResponse {
-            success: true,
-            output: format!("Executing: {} {:?}", request.command, request.args),
-            exit_code: Some(0),
-            error: None,
-        })
+        // Use forge_services to execute the actual command
+        let command_result = self.services.execute_command(
+            &request.command,
+            &request.args,
+            request.working_dir.as_deref()
+        ).await;
+
+        match command_result {
+            Ok(output) => Ok(CommandResponse {
+                success: output.exit_code == 0,
+                output: output.stdout,
+                exit_code: Some(output.exit_code),
+                error: if output.exit_code != 0 { Some(output.stderr) } else { None },
+            }),
+            Err(error) => Ok(CommandResponse {
+                success: false,
+                output: String::new(),
+                exit_code: None,
+                error: Some(error.to_string()),
+            }),
+        }
     }
 
     /// Read file content through forgecode
     pub async fn read_file(&self, request: FileReadRequest) -> Result<FileReadResponse, ApiError> {
-        // TODO: Implement actual file reading using forge_services
-        // For now, return a mock response
-        Ok(FileReadResponse {
-            success: true,
-            content: "File content placeholder".to_string(),
-            path: request.path,
-            error: None,
-        })
+        // Use forge_services to read the actual file
+        let file_content = self.services.read_file(
+            &request.path,
+            request.offset,
+            request.limit
+        ).await;
+
+        match file_content {
+            Ok(content) => Ok(FileReadResponse {
+                success: true,
+                content,
+                path: request.path,
+                error: None,
+            }),
+            Err(error) => Ok(FileReadResponse {
+                success: false,
+                content: String::new(),
+                path: request.path,
+                error: Some(error.to_string()),
+            }),
+        }
     }
 
     /// Get system information
     pub async fn get_system_info(&self) -> Result<serde_json::Value, ApiError> {
-        // TODO: Implement actual system info using forge_services
-        // For now, return mock data
-        Ok(json!({
-            "service": "forgecode-gateway",
-            "version": env!("CARGO_PKG_VERSION"),
-            "forgecode_version": "0.1.0",
-            "status": "connected"
-        }))
+        // Use forge_services to get actual system information
+        let system_info = self.services.get_system_info().await;
+
+        match system_info {
+            Ok(info) => Ok(json!({
+                "service": "forgecode-gateway",
+                "version": env!("CARGO_PKG_VERSION"),
+                "forgecode_version": "0.1.0",
+                "status": "connected",
+                "system_info": info
+            })),
+            Err(error) => Ok(json!({
+                "service": "forgecode-gateway",
+                "version": env!("CARGO_PKG_VERSION"),
+                "forgecode_version": "0.1.0",
+                "status": "error",
+                "error": error.to_string()
+            })),
+        }
     }
 }
 
