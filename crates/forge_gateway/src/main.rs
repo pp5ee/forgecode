@@ -1,17 +1,18 @@
+use actix_web::{web, App, HttpServer, middleware::Logger};
+use actix_web_httpauth::middleware::HttpAuthentication;
+use std::env;
+
+mod handlers;
 mod auth;
 mod forgecode_client;
-mod handlers;
-mod server;
+mod middleware;
 
 use crate::auth::TokenManager;
 use crate::forgecode_client::ForgeCodeClient;
-use crate::server::create_routes;
-use std::env;
-use warp::Filter;
+use crate::middleware::url_token_auth;
 
-#[tokio::main]
-async fn main() {
-    // Initialize logging
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     // Get configuration from environment variables
@@ -27,7 +28,7 @@ async fn main() {
     println!("Connecting to forgecode service at: {}", forgecode_base_url);
 
     // Initialize components
-    let token_manager = TokenManager::new("http://localhost:8081".to_string());
+    let token_manager = TokenManager::new();
     let forgecode_client = ForgeCodeClient::new(forgecode_base_url);
 
     // Check forgecode service health
@@ -37,11 +38,27 @@ async fn main() {
         Err(e) => println!("Warning: Cannot connect to forgecode service: {}", e),
     }
 
-    // Create routes
-    let routes = create_routes(token_manager, forgecode_client);
+    HttpServer::new(move || {
+        let auth = HttpAuthentication::with_fn(url_token_auth);
 
-    // Start server
-    warp::serve(routes)
-        .run(([0, 0, 0, 0], gateway_port))
-        .await;
+        App::new()
+            .wrap(Logger::default())
+            .app_data(web::Data::new(token_manager.clone()))
+            .app_data(web::Data::new(forgecode_client.clone()))
+            .service(
+                web::scope("/api")
+                    .service(handlers::generate_token)
+                    .service(handlers::renew_token)
+                    .wrap(auth.clone())
+                    .service(handlers::execute_command)
+            )
+            .service(
+                actix_files::Files::new("/", "static")
+                    .index_file("index.html")
+                    .use_last_modified(true)
+            )
+    })
+    .bind(("0.0.0.0", gateway_port))?
+    .run()
+    .await
 }

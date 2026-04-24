@@ -1,6 +1,19 @@
 version: '3.8'
 
 services:
+  forgecode:
+    build:
+      context: ../..
+      dockerfile: crates/forge_gateway/Dockerfile.forgecode
+    ports:
+      - "8081:8081"
+    environment:
+      - RUST_LOG=info
+      - PORT=8081
+    restart: unless-stopped
+    networks:
+      - forgecode-network
+
   forge-gateway:
     build:
       context: .
@@ -9,19 +22,18 @@ services:
       - "8080:8080"
     environment:
       - RUST_LOG=info
-      - BIND_ADDRESS=0.0.0.0
-      - PORT=8080
+      - GATEWAY_PORT=8080
+      - FORGECODE_BASE_URL=http://forgecode:8081
       - TOKEN_EXPIRATION_SECONDS=3600
     restart: unless-stopped
+    depends_on:
+      - forgecode
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    volumes:
-      - ./config:/app/config:ro
-      - ./logs:/app/logs
     networks:
       - forgecode-network
 

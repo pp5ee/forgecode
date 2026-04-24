@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use reqwest::Client;
 use std::time::Duration;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Error)]
 pub enum ForgeCodeError {
@@ -11,35 +11,20 @@ pub enum ForgeCodeError {
     ServiceUnavailable,
     #[error("Invalid response format: {0}")]
     InvalidResponse(String),
-    #[error("Authentication failed")]
-    AuthenticationFailed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecuteCodeRequest {
-    pub code: String,
-    pub language: String,
-    pub session_id: Option<String>,
+#[derive(Debug, Serialize)]
+pub struct ExecuteCommandRequest {
+    pub command: String,
+    pub args: Vec<String>,
+    pub working_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecuteCodeResponse {
+#[derive(Debug, Deserialize)]
+pub struct ExecuteCommandResponse {
     pub output: String,
-    pub error: Option<String>,
-    pub session_id: Option<String>,
-    pub execution_time: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidateTokenRequest {
-    pub token: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidateTokenResponse {
-    pub valid: bool,
-    pub user_id: Option<String>,
-    pub permissions: Vec<String>,
+    pub success: bool,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -61,8 +46,14 @@ impl ForgeCodeClient {
         }
     }
 
-    pub async fn execute_code(&self, request: ExecuteCodeRequest) -> Result<ExecuteCodeResponse, ForgeCodeError> {
-        let url = format!("{}/api/execute", self.base_url);
+    pub async fn execute_command(&self, command: &str, args: &[String]) -> Result<String, ForgeCodeError> {
+        let url = format!("{}/api/execute-command", self.base_url);
+
+        let request = ExecuteCommandRequest {
+            command: command.to_string(),
+            args: args.to_vec(),
+            working_dir: None,
+        };
 
         let response = self.client
             .post(&url)
@@ -75,17 +66,51 @@ impl ForgeCodeClient {
             return Err(ForgeCodeError::ServiceUnavailable);
         }
 
-        let response_data: ExecuteCodeResponse = response
+        let response_data: ExecuteCommandResponse = response
             .json()
             .await
             .map_err(|e| ForgeCodeError::InvalidResponse(e.to_string()))?;
 
-        Ok(response_data)
+        Ok(response_data.output)
     }
 
-    pub async fn validate_token(&self, token: String) -> Result<ValidateTokenResponse, ForgeCodeError> {
-        let url = format!("{}/api/validate-token", self.base_url);
-        let request = ValidateTokenRequest { token };
+    pub async fn health_check(&self) -> Result<bool, ForgeCodeError> {
+        let url = format!("{}/health", self.base_url);
+
+        match self.client.get(&url).send().await {
+            Ok(response) => Ok(response.status().is_success()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    // Additional methods for forgecode integration
+    pub async fn get_available_commands(&self) -> Result<Vec<String>, ForgeCodeError> {
+        let url = format!("{}/api/commands", self.base_url);
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ForgeCodeError::RequestFailed(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(ForgeCodeError::ServiceUnavailable);
+        }
+
+        let commands: Vec<String> = response
+            .json()
+            .await
+            .map_err(|e| ForgeCodeError::InvalidResponse(e.to_string()))?;
+
+        Ok(commands)
+    }
+
+    pub async fn chat(&self, message: &str) -> Result<String, ForgeCodeError> {
+        let url = format!("{}/api/chat", self.base_url);
+
+        let request = serde_json::json!({
+            "message": message
+        });
 
         let response = self.client
             .post(&url)
@@ -95,26 +120,14 @@ impl ForgeCodeClient {
             .map_err(|e| ForgeCodeError::RequestFailed(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(ForgeCodeError::AuthenticationFailed);
+            return Err(ForgeCodeError::ServiceUnavailable);
         }
 
-        let response_data: ValidateTokenResponse = response
+        let response_data: serde_json::Value = response
             .json()
             .await
             .map_err(|e| ForgeCodeError::InvalidResponse(e.to_string()))?;
 
-        Ok(response_data)
-    }
-
-    pub async fn health_check(&self) -> Result<bool, ForgeCodeError> {
-        let url = format!("{}/health", self.base_url);
-
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| ForgeCodeError::RequestFailed(e.to_string()))?;
-
-        Ok(response.status().is_success())
+        Ok(response_data["response"].as_str().unwrap_or("No response").to_string())
     }
 }

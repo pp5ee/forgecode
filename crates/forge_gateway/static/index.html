@@ -3,43 +3,254 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ForgeCode Gateway</title>
-    <link rel="stylesheet" href="/static/css/styles.css">
+    <title>Forgecode Gateway</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .terminal {
+            background-color: #000;
+            border: 1px solid #444;
+            border-radius: 5px;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+
+        .input-line {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .prompt {
+            color: #00ff00;
+            margin-right: 10px;
+        }
+
+        .command-input {
+            background: transparent;
+            border: none;
+            color: #d4d4d4;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            outline: none;
+            flex: 1;
+        }
+
+        .output {
+            white-space: pre-wrap;
+            margin-bottom: 10px;
+        }
+
+        .success {
+            color: #00ff00;
+        }
+
+        .error {
+            color: #ff4444;
+        }
+
+        .auth-section {
+            background-color: #2d2d2d;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .token-input {
+            width: 300px;
+            padding: 5px;
+            background: #1e1e1e;
+            border: 1px solid #444;
+            color: #d4d4d4;
+            border-radius: 3px;
+        }
+
+        button {
+            background: #007acc;
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+
+        button:hover {
+            background: #005a9e;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔐 ForgeCode Gateway</h1>
-
-        <!-- Authentication Section -->
-        <div class="auth-section" id="authSection">
-            <h2>Authentication</h2>
-            <div class="status" id="authStatus">
-                Please generate a token to access the gateway.
-            </div>
-            <button class="button" onclick="generateToken()">Generate New Token</button>
-            <div id="tokenInfo" class="hidden">
-                <p><strong>Your Token:</strong> <span id="tokenValue"></span></p>
-                <p><strong>Expires:</strong> <span id="tokenExpiry"></span></p>
-                <button class="button" onclick="validateToken()">Validate Token</button>
-                <button class="button" onclick="renewToken()">Renew Token</button>
-                <button class="button" onclick="connectGateway()">Connect to Gateway</button>
-            </div>
+        <div class="header">
+            <h1>Forgecode Gateway</h1>
+            <p>Web interface for forgecode programming capabilities</p>
         </div>
 
-        <!-- Gateway Section -->
-        <div class="gateway-section hidden" id="gatewaySection">
-            <h2>Gateway Terminal</h2>
-            <div class="status" id="gatewayStatus">
-                Ready to execute commands.
+        <div class="auth-section" id="authSection">
+            <h3>Authentication</h3>
+            <p>Enter your access token to use the gateway:</p>
+            <input type="text" id="tokenInput" class="token-input" placeholder="Enter token...">
+            <button onclick="setToken()">Set Token</button>
+            <button onclick="generateToken()">Generate New Token</button>
+            <span id="tokenStatus"></span>
+        </div>
+
+        <div class="terminal" id="terminalSection">
+            <div id="output">
+                <div class="output">Forgecode Gateway Terminal</div>
+                <div class="output">Type 'help' for available commands</div>
+                <div class="output">Enter your token above to start</div>
             </div>
-            <div class="terminal" id="terminal"></div>
-            <div>
-                <input type="text" id="command" placeholder="Enter command...">
-                <button class="button" onclick="sendCommand()">Execute</button>
+            <div class="input-line">
+                <span class="prompt">$</span>
+                <input type="text" id="commandInput" class="command-input" placeholder="Enter command..." disabled>
             </div>
         </div>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script>
+        let currentToken = null;
+
+        function setToken() {
+            const tokenInput = document.getElementById('tokenInput');
+            const token = tokenInput.value.trim();
+
+            if (token) {
+                currentToken = token;
+                document.getElementById('tokenStatus').textContent = '✓ Token set';
+                document.getElementById('tokenStatus').className = 'success';
+                document.getElementById('commandInput').disabled = false;
+                document.getElementById('commandInput').focus();
+                addOutput('Token validated. You can now use the terminal.');
+            } else {
+                document.getElementById('tokenStatus').textContent = 'Please enter a token';
+                document.getElementById('tokenStatus').className = 'error';
+            }
+        }
+
+        async function generateToken() {
+            try {
+                const response = await fetch('/api/token/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        permissions: ['execute', 'read', 'write']
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('tokenInput').value = data.token;
+                    document.getElementById('tokenStatus').textContent = '✓ Token generated';
+                    document.getElementById('tokenStatus').className = 'success';
+                    addOutput('New token generated. Click "Set Token" to use it.');
+                } else {
+                    throw new Error('Failed to generate token');
+                }
+            } catch (error) {
+                document.getElementById('tokenStatus').textContent = 'Error generating token';
+                document.getElementById('tokenStatus').className = 'error';
+                addOutput('Error: ' + error.message, 'error');
+            }
+        }
+
+        function addOutput(text, type = 'normal') {
+            const outputDiv = document.getElementById('output');
+            const outputLine = document.createElement('div');
+            outputLine.className = 'output ' + type;
+            outputLine.textContent = text;
+            outputDiv.appendChild(outputLine);
+
+            // Auto-scroll to bottom
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
+
+        async function executeCommand(command) {
+            if (!currentToken) {
+                addOutput('Error: No token set. Please set a token first.', 'error');
+                return;
+            }
+
+            addOutput('$ ' + command);
+
+            try {
+                const [cmd, ...args] = command.split(' ');
+
+                const response = await fetch('/api/command/execute', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + currentToken
+                    },
+                    body: JSON.stringify({
+                        command: cmd,
+                        args: args
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        addOutput(data.output, 'success');
+                    } else {
+                        addOutput(data.output, 'error');
+                    }
+                } else {
+                    throw new Error('Command execution failed');
+                }
+            } catch (error) {
+                addOutput('Error: ' + error.message, 'error');
+            }
+        }
+
+        // Handle command input
+        document.getElementById('commandInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                const command = this.value.trim();
+                if (command) {
+                    executeCommand(command);
+                    this.value = '';
+                }
+            }
+        });
+
+        // Check URL for token parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlToken = urlParams.get('token');
+        if (urlToken) {
+            document.getElementById('tokenInput').value = urlToken;
+            setToken();
+        }
+    </script>
 </body>
 </html>

@@ -1,161 +1,81 @@
-use crate::auth::{TokenManager, AuthError};
-use std::sync::Arc;
-use crate::forgecode_client::{ForgeCodeClient, ExecuteCodeRequest};
+use actix_web::{web, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
-use warp::{Filter, Rejection, Reply};
-use uuid::Uuid;
+use crate::auth::TokenManager;
+use crate::forgecode_client::ForgeCodeClient;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExecuteRequest {
-    pub code: String,
-    pub language: String,
-    pub session_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExecuteResponse {
-    pub output: String,
-    pub error: Option<String>,
-    pub session_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AuthRequest {
-    pub user_id: Option<String>,
+#[derive(Debug, Deserialize)]
+pub struct TokenRequest {
     pub permissions: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AuthResponse {
+#[derive(Debug, Serialize)]
+pub struct TokenResponse {
     pub token: String,
+    pub expires_in: u64,
 }
 
-pub async fn execute_code_handler(
-    forgecode_client: ForgeCodeClient,
-    body: ExecuteRequest,
-) -> Result<impl Reply, Rejection> {
-    let request = ExecuteCodeRequest {
-        code: body.code.clone(),
-        language: body.language.clone(),
-        session_id: body.session_id.clone(),
-    };
+#[derive(Debug, Deserialize)]
+pub struct CommandRequest {
+    pub command: String,
+    pub args: Vec<String>,
+}
 
-    match forgecode_client.execute_code(request).await {
-        Ok(response) => {
-            let reply = ExecuteResponse {
-                output: response.output,
-                error: response.error,
-                session_id: response.session_id,
-            };
-            Ok(warp::reply::json(&reply))
+#[derive(Debug, Serialize)]
+pub struct CommandResponse {
+    pub output: String,
+    pub success: bool,
+}
+
+/// Generate a new authentication token
+#[actix_web::post("/token/generate")]
+pub async fn generate_token(
+    token_manager: web::Data<TokenManager>,
+    request: web::Json<TokenRequest>,
+) -> impl Responder {
+    match token_manager.generate_token(request.permissions.clone()) {
+        Ok((token, expires_in)) => {
+            HttpResponse::Ok().json(TokenResponse {
+                token,
+                expires_in,
+            })
         }
-        Err(_) => {
-            // Fallback to mock response if service is unavailable
-            let reply = ExecuteResponse {
-                output: format!("Mock execution of {} code: {}", body.language, body.code),
-                error: None,
-                session_id: body.session_id,
-            };
-            Ok(warp::reply::json(&reply))
+        Err(e) => HttpResponse::BadRequest().body(format!("Failed to generate token: {}", e)),
+    }
+}
+
+/// Renew an existing token
+#[actix_web::post("/token/renew")]
+pub async fn renew_token(
+    token_manager: web::Data<TokenManager>,
+    request: web::Json<TokenRequest>,
+) -> impl Responder {
+    // For now, this is the same as generate_token
+    // In a real implementation, this would validate the existing token first
+    match token_manager.generate_token(request.permissions.clone()) {
+        Ok((token, expires_in)) => {
+            HttpResponse::Ok().json(TokenResponse {
+                token,
+                expires_in,
+            })
         }
+        Err(e) => HttpResponse::BadRequest().body(format!("Failed to renew token: {}", e)),
     }
 }
 
-pub async fn generate_token_handler(
-    token_manager: Arc<TokenManager>,
-    body: AuthRequest,
-) -> Result<impl Reply, Rejection> {
-    match token_manager.generate_token(body.user_id, body.permissions).await {
-        Ok(token_id) => {
-            let response = AuthResponse {
-                token: token_id.to_string(),
-            };
-            Ok(warp::reply::json(&response))
-        }
-        Err(e) => Err(warp::reject::custom(AuthRejection(e))),
+/// Execute a forgecode command
+#[actix_web::post("/command/execute")]
+pub async fn execute_command(
+    forgecode_client: web::Data<ForgeCodeClient>,
+    request: web::Json<CommandRequest>,
+) -> impl Responder {
+    match forgecode_client.execute_command(&request.command, &request.args).await {
+        Ok(output) => HttpResponse::Ok().json(CommandResponse {
+            output,
+            success: true,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(CommandResponse {
+            output: format!("Error: {}", e),
+            success: false,
+        }),
     }
-}
-
-pub async fn validate_token_handler(
-    token_manager: Arc<TokenManager>,
-    token: String,
-) -> Result<impl Reply, Rejection> {
-    let token_id = Uuid::parse_str(&token)
-        .map_err(|_| warp::reject::custom(AuthRejection(AuthError::InvalidTokenFormat)))?;
-
-    match token_manager.validate_token(token_id, None).await {
-        Ok(token_data) => {
-            let response = serde_json::json!({
-                "valid": true,
-                "user_id": token_data.user_id,
-                "permissions": token_data.permissions
-            });
-            Ok(warp::reply::json(&response))
-        }
-        Err(e) => Err(warp::reject::custom(AuthRejection(e))),
-    }
-}
-
-pub async fn renew_token_handler(
-    token_manager: Arc<TokenManager>,
-    token: String,
-) -> Result<impl Reply, Rejection> {
-    let token_id = Uuid::parse_str(&token)
-        .map_err(|_| warp::reject::custom(AuthRejection(AuthError::InvalidTokenFormat)))?;
-
-    match token_manager.renew_token(token_id).await {
-        Ok(new_token_id) => {
-            let response = AuthResponse {
-                token: new_token_id.to_string(),
-            };
-            Ok(warp::reply::json(&response))
-        }
-        Err(e) => Err(warp::reject::custom(AuthRejection(e))),
-    }
-}
-
-pub async fn revoke_token_handler(
-    token_manager: Arc<TokenManager>,
-    token: String,
-) -> Result<impl Reply, Rejection> {
-    let token_id = Uuid::parse_str(&token)
-        .map_err(|_| warp::reject::custom(AuthRejection(AuthError::InvalidTokenFormat)))?;
-
-    match token_manager.revoke_token(token_id).await {
-        Ok(()) => {
-            let response = serde_json::json!({"success": true});
-            Ok(warp::reply::json(&response))
-        }
-        Err(e) => Err(warp::reject::custom(AuthRejection(e))),
-    }
-}
-
-// Custom rejection for auth errors
-#[derive(Debug)]
-pub struct AuthRejection(pub AuthError);
-
-impl warp::reject::Reject for AuthRejection {}
-
-impl std::fmt::Display for AuthRejection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Auth error: {}", self.0)
-    }
-}
-
-pub async fn handle_auth_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    if let Some(auth_rejection) = err.find::<AuthRejection>() {
-        let error_message = auth_rejection.0.to_string();
-        let json = warp::reply::json(&serde_json::json!({
-            "error": error_message
-        }));
-        return Ok(warp::reply::with_status(json, warp::http::StatusCode::UNAUTHORIZED));
-    }
-
-    Ok(warp::reply::with_status(
-        warp::reply::json(&serde_json::json!({
-            "error": "Internal server error"
-        })),
-        warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-    ))
 }
