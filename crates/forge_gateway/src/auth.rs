@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use uuid::Uuid;
-use actix_web::{dev::ServiceRequest, Error, HttpMessage};
+use actix_web::{dev::ServiceRequest, Error, HttpMessage, web};
 
 #[derive(Debug, Clone)]
 pub struct TokenManager {
