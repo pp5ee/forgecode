@@ -146,7 +146,6 @@ actix-files = "0.7"
 actix-rt = "2.12"
 actix-web-actors = "4.4"
 tracing-actix-web = "0.7"
-chrono = { version = "0.4.44", features = ["serde"] }
 
 # Internal crates
 forge_embed = { path = "crates/forge_embed" }

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ForgeCode Gateway</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 ForgeCode Gateway</h1>
+
+        <!-- Authentication Section -->
+        <div class="auth-section" id="authSection">
+            <h2>Authentication</h2>
+            <div class="status" id="authStatus">
+                Please generate a token to access the gateway.
+            </div>
+            <button class="button" onclick="generateToken()">Generate New Token</button>
+            <div id="tokenInfo" class="hidden">
+                <p><strong>Your Token:</strong> <span id="tokenValue"></span></p>
+                <p><strong>Expires:</strong> <span id="tokenExpiry"></span></p>
+                <button class="button" onclick="validateToken()">Validate Token</button>
+                <button class="button" onclick="renewToken()">Renew Token</button>
+                <button class="button" onclick="connectGateway()">Connect to Gateway</button>
+            </div>
+        </div>
+
+        <!-- Gateway Section -->
+        <div class="gateway-section hidden" id="gatewaySection">
+            <h2>Gateway Terminal</h2>
+            <div class="status" id="gatewayStatus">
+                Ready to execute commands.
+            </div>
+            <div class="terminal" id="terminal"></div>
+            <div>
+                <input type="text" id="command" placeholder="Enter command...">
+                <button class="button" onclick="sendCommand()">Execute</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

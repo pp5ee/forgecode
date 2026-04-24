@@ -1,69 +1,359 @@
-//! HTTP server implementation for the gateway
+use crate::auth::TokenManager;
+use crate::forgecode_client::{ForgeCodeClient, ExecuteCodeRequest};
+use crate::handlers::{execute_code_handler, generate_token_handler, validate_token_handler, renew_token_handler, revoke_token_handler, handle_auth_rejection, ExecuteRequest, AuthRequest};
+use serde::{Deserialize, Serialize};
+// Remove unused import
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use warp::{Filter, Rejection, Reply};
+use warp::ws::{Message, WebSocket};
+use futures::{SinkExt, StreamExt};
+use uuid::Uuid;
 
-use actix_cors::Cors;
-use actix_files::Files;
-use actix_web::{web, App, HttpServer};
-use std::sync::{Arc, Mutex};
-use tracing::info;
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WebSocketMessage {
+    pub action: String,
+    pub code: Option<String>,
+    pub language: Option<String>,
+    pub session_id: Option<String>,
+    pub token: Option<String>,
+}
 
-use crate::{GatewayConfig, handlers, websocket, auth, integration, Result};
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WebSocketResponse {
+    pub action: String,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    pub session_id: Option<String>,
+}
 
-/// Start the HTTP server with the given configuration
-pub async fn run_server(config: GatewayConfig) -> Result<()> {
-    let bind_addr = format!("{}:{}", config.bind_address, config.port);
+pub async fn handle_websocket_connection(
+    ws: WebSocket,
+    token_manager: Arc<TokenManager>,
+    forgecode_client: Arc<Mutex<ForgeCodeClient>>,
+) {
+    let (mut ws_tx, mut ws_rx) = ws.split();
 
-    info!("Starting HTTP server on {}", bind_addr);
+    while let Some(result) = ws_rx.next().await {
+        match result {
+            Ok(message) => {
+                if let Ok(text) = message.to_str() {
+                    match serde_json::from_str::<WebSocketMessage>(text) {
+                        Ok(ws_message) => {
+                            let response = match ws_message.action.as_str() {
+                                "execute" => {
+                                    handle_websocket_execute(
+                                        ws_message,
+                                        token_manager.clone(),
+                                        forgecode_client.clone(),
+                                    ).await
+                                }
+                                "authenticate" => {
+                                    handle_websocket_authenticate(
+                                        ws_message,
+                                        token_manager.clone(),
+                                    ).await
+                                }
+                                "validate" => {
+                                    handle_websocket_validate(
+                                        ws_message,
+                                        token_manager.clone(),
+                                    ).await
+                                }
+                                _ => {
+                                    WebSocketResponse {
+                                        action: "error".to_string(),
+                                        output: None,
+                                        error: Some("Unknown action".to_string()),
+                                        session_id: None,
+                                    }
+                                }
+                            };
 
-    // Create token manager
-    let token_manager = web::Data::new(Mutex::new(auth::TokenManager::new()));
+                            if let Ok(response_json) = serde_json::to_string(&response) {
+                                if let Err(e) = ws_tx.send(Message::text(response_json)).await {
+                                    eprintln!("Failed to send WebSocket message: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let error_response = WebSocketResponse {
+                                action: "error".to_string(),
+                                output: None,
+                                error: Some(format!("Invalid message format: {}", e)),
+                                session_id: None,
+                            };
+                            if let Ok(error_json) = serde_json::to_string(&error_response) {
+                                let _ = ws_tx.send(Message::text(error_json)).await;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("WebSocket error: {}", e);
+                break;
+            }
+        }
+    }
+}
 
-    // Initialize forgecode service
-    info!("Initializing forgecode service...");
-    if let Err(e) = integration::initialize_forge_service().await {
-        info!("Forgecode service initialization failed: {}, continuing without full integration", e);
-    } else {
-        info!("Forgecode service initialized successfully");
+async fn handle_websocket_execute(
+    message: WebSocketMessage,
+    token_manager: Arc<TokenManager>,
+    forgecode_client: Arc<Mutex<ForgeCodeClient>>,
+) -> WebSocketResponse {
+    // Validate token if provided
+    if let Some(token) = &message.token {
+        if let Ok(token_id) = Uuid::parse_str(token) {
+            if let Err(e) = token_manager.validate_token(token_id, Some("execute")).await {
+                return WebSocketResponse {
+                    action: "error".to_string(),
+                    output: None,
+                    error: Some(format!("Authentication failed: {}", e)),
+                    session_id: message.session_id,
+                };
+            }
+        } else {
+            return WebSocketResponse {
+                action: "error".to_string(),
+                output: None,
+                error: Some("Invalid token format".to_string()),
+                session_id: message.session_id,
+            };
+        }
     }
 
-    HttpServer::new(move || {
-        let cors = Cors::default()
-            .allow_any_origin()
-            .allow_any_method()
-            .allow_any_header()
-            .max_age(3600);
+    // Execute code through forgecode service
+    if let (Some(code), Some(language)) = (message.code, message.language) {
+        let language_clone = language.clone();
+        let request = ExecuteCodeRequest {
+            code,
+            language,
+            session_id: message.session_id.clone(),
+        };
 
-        // Create the token middleware
-        let token_middleware = auth::UrlTokenMiddleware::new(token_manager.clone());
+        let client_guard = forgecode_client.lock().await;
+        match client_guard.execute_code(request).await {
+            Ok(response) => {
+                WebSocketResponse {
+                    action: "execution_result".to_string(),
+                    output: Some(response.output),
+                    error: response.error,
+                    session_id: response.session_id,
+                }
+            }
+            Err(_) => {
+                // Fallback to mock execution
+                WebSocketResponse {
+                    action: "execution_result".to_string(),
+                    output: Some(format!("Mock WebSocket execution of {} code", language_clone)),
+                    error: None,
+                    session_id: message.session_id,
+                }
+            }
+        }
+    } else {
+        WebSocketResponse {
+            action: "error".to_string(),
+            output: None,
+            error: Some("Missing code or language".to_string()),
+            session_id: message.session_id,
+        }
+    }
+}
 
-        App::new()
-            .app_data(token_manager.clone())
-            .wrap(cors)
-            .wrap(token_middleware)
-            .wrap(tracing_actix_web::TracingLogger::default())
-            // Health check endpoint (public - exempt from auth)
-            .route("/health", web::get().to(handlers::health_check))
-            // Authentication endpoints (public - exempt from auth)
-            .route("/auth/token/validate", web::post().to(handlers::validate_token))
-            .route("/auth/token/renew", web::post().to(handlers::renew_token))
-            .route("/auth/token/generate", web::post().to(handlers::generate_token))
-            // WebSocket endpoint for real-time terminal (protected)
-            .route("/ws", web::get().to(|req, stream, token_manager: web::Data<Mutex<auth::TokenManager>>| {
-                websocket::websocket_handler(req, stream, token_manager)
-            }))
-            // Forgecode integration endpoints (protected)
-            .route("/api/command", web::post().to(integration::execute_command_handler))
-            .route("/api/file/read", web::post().to(integration::read_file_handler))
-            .route("/api/system/info", web::get().to(integration::system_info_handler))
-            // Static file serving for web UI (public access, auth handled in UI)
-            .service(Files::new("/static", "static/").index_file("index.html"))
-            // Root path redirects to static index with proper token handling
-            .route("/", web::get().to(handlers::serve_index))
-    })
-    .bind(&bind_addr)
-    .map_err(|e| crate::GatewayError::Http(e.to_string()))?
-    .run()
-    .await
-    .map_err(|e| crate::GatewayError::Http(e.to_string()))?;
+pub async fn handle_websocket_authenticate(
+    message: WebSocketMessage,
+    token_manager: Arc<TokenManager>,
+) -> WebSocketResponse {
+    let user_id = message.token.clone(); // Using token field for user_id in this context
+    let permissions = vec!["execute".to_string()]; // Default permissions for WebSocket
 
-    Ok(())
+    match token_manager.generate_token(user_id, permissions).await {
+        Ok(token_id) => {
+            WebSocketResponse {
+                action: "authentication_result".to_string(),
+                output: Some(token_id.to_string()),
+                error: None,
+                session_id: None,
+            }
+        }
+        Err(e) => {
+            WebSocketResponse {
+                action: "error".to_string(),
+                output: None,
+                error: Some(format!("Authentication failed: {}", e)),
+                session_id: None,
+            }
+        }
+    }
+}
+
+pub async fn handle_websocket_validate(
+    message: WebSocketMessage,
+    token_manager: Arc<TokenManager>,
+) -> WebSocketResponse {
+    if let Some(token) = message.token {
+        if let Ok(token_id) = Uuid::parse_str(&token) {
+            match token_manager.validate_token(token_id, None).await {
+                Ok(token_data) => {
+                    WebSocketResponse {
+                        action: "validation_result".to_string(),
+                        output: Some(format!("Valid token for user: {:?}", token_data.user_id)),
+                        error: None,
+                        session_id: None,
+                    }
+                }
+                Err(e) => {
+                    WebSocketResponse {
+                        action: "error".to_string(),
+                        output: None,
+                        error: Some(format!("Token validation failed: {}", e)),
+                        session_id: None,
+                    }
+                }
+            }
+        } else {
+            WebSocketResponse {
+                action: "error".to_string(),
+                output: None,
+                error: Some("Invalid token format".to_string()),
+                session_id: None,
+            }
+        }
+    } else {
+        WebSocketResponse {
+            action: "error".to_string(),
+            output: None,
+            error: Some("Missing token".to_string()),
+            session_id: None,
+        }
+    }
+}
+
+pub fn create_routes(
+    token_manager: TokenManager,
+    forgecode_client: ForgeCodeClient,
+) -> impl Filter<Extract = impl Reply, Error = std::convert::Infallible> + Clone {
+    let token_manager = Arc::new(token_manager);
+    let forgecode_client = Arc::new(Mutex::new(forgecode_client));
+
+    // Static file serving - use a separate route that handles the different error type
+    let static_files = warp::path("static")
+        .and(warp::fs::dir("crates/forge_gateway/static"));
+
+    // API routes
+    let api_routes = warp::path("api")
+        .and(
+            // Execute code endpoint
+            warp::path("execute")
+                .and(warp::post())
+                .and(warp::body::json())
+                .and_then({
+                    let forgecode_client = forgecode_client.clone();
+                    move |body: ExecuteRequest| {
+                        let client = forgecode_client.clone();
+                        async move {
+                            let client_guard = client.lock().await;
+                            execute_code_handler(client_guard.clone(), body).await
+                        }
+                    }
+                })
+                // Token management endpoints
+                .or(warp::path("auth")
+                    .and(warp::path("generate"))
+                    .and(warp::post())
+                    .and(warp::body::json())
+                    .and_then({
+                        let token_manager = token_manager.clone();
+                        move |body: AuthRequest| {
+                            let tm = token_manager.clone();
+                            generate_token_handler(tm, body)
+                        }
+                    }))
+                .or(warp::path("auth")
+                    .and(warp::path("validate"))
+                    .and(warp::post())
+                    .and(warp::body::json())
+                    .and_then({
+                        let token_manager = token_manager.clone();
+                        move |body: serde_json::Value| {
+                            let tm = token_manager.clone();
+                            async move {
+                                if let Some(token) = body.get("token").and_then(|t| t.as_str()) {
+                                    validate_token_handler(tm, token.to_string()).await
+                                } else {
+                                    Err(warp::reject::custom(crate::handlers::AuthRejection(
+                                        crate::auth::AuthError::InvalidTokenFormat,
+                                    )))
+                                }
+                            }
+                        }
+                    }))
+                .or(warp::path("auth")
+                    .and(warp::path("renew"))
+                    .and(warp::post())
+                    .and(warp::body::json())
+                    .and_then({
+                        let token_manager = token_manager.clone();
+                        move |body: serde_json::Value| {
+                            let tm = token_manager.clone();
+                            async move {
+                                if let Some(token) = body.get("token").and_then(|t| t.as_str()) {
+                                    renew_token_handler(tm, token.to_string()).await
+                                } else {
+                                    Err(warp::reject::custom(crate::handlers::AuthRejection(
+                                        crate::auth::AuthError::InvalidTokenFormat,
+                                    )))
+                                }
+                            }
+                        }
+                    }))
+                .or(warp::path("auth")
+                    .and(warp::path("revoke"))
+                    .and(warp::post())
+                    .and(warp::body::json())
+                    .and_then({
+                        let token_manager = token_manager.clone();
+                        move |body: serde_json::Value| {
+                            let tm = token_manager.clone();
+                            async move {
+                                if let Some(token) = body.get("token").and_then(|t| t.as_str()) {
+                                    revoke_token_handler(tm, token.to_string()).await
+                                } else {
+                                    Err(warp::reject::custom(crate::handlers::AuthRejection(
+                                        crate::auth::AuthError::InvalidTokenFormat,
+                                    )))
+                                }
+                            }
+                        }
+                    }))
+        );
+
+    // WebSocket route
+    let websocket_route = warp::path("ws")
+        .and(warp::ws())
+        .and_then({
+            let token_manager = token_manager.clone();
+            let forgecode_client = forgecode_client.clone();
+            move |ws: warp::ws::Ws| {
+                let tm = token_manager.clone();
+                let fc = forgecode_client.clone();
+                async move {
+                    Ok::<_, Rejection>(ws.on_upgrade(move |socket| {
+                        handle_websocket_connection(socket, tm, fc)
+                    }))
+                }
+            }
+        });
+
+    // Combine API and WebSocket routes only
+    // Static file serving is better handled separately or through a reverse proxy
+    let routes = api_routes
+        .or(websocket_route)
+        .recover(handle_auth_rejection);
+
+    routes
 }

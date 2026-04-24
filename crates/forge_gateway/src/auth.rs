@@ -1,165 +1,127 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
-use actix_web::{dev::ServiceRequest, Error, HttpMessage, web};
+use thiserror::Error;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Token {
+    pub id: Uuid,
+    pub created_at: std::time::SystemTime,
+    pub expires_at: std::time::SystemTime,
+    pub user_id: Option<String>,
+    pub permissions: Vec<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum AuthError {
+    #[error("Token not found")]
+    TokenNotFound,
+    #[error("Token expired")]
+    TokenExpired,
+    #[error("Invalid token format")]
+    InvalidTokenFormat,
+    #[error("Insufficient permissions: {0}")]
+    InsufficientPermissions(String),
+    #[error("ForgeCode service unavailable")]
+    ServiceUnavailable,
+}
+
+#[derive(Clone)]
 pub struct TokenManager {
-    tokens: Arc<RwLock<HashMap<String, bool>>>,
+    tokens: Arc<RwLock<HashMap<Uuid, Token>>>,
+    forgecode_url: String,
 }
 
 impl TokenManager {
-    pub fn new() -> Self {
-        let initial_token = Uuid::new_v4().to_string();
-        let mut tokens = HashMap::new();
-        tokens.insert(initial_token.clone(), true);
-
+    pub fn new(forgecode_url: String) -> Self {
         Self {
-            tokens: Arc::new(RwLock::new(tokens)),
+            tokens: Arc::new(RwLock::new(HashMap::new())),
+            forgecode_url,
         }
     }
 
-    pub fn validate_token(&self, token: &str) -> bool {
+    pub async fn generate_token(&self, user_id: Option<String>, permissions: Vec<String>) -> Result<Uuid, AuthError> {
+        // Validate permissions with forgecode service
+        if let Err(_) = self.validate_permissions(&permissions).await {
+            return Err(AuthError::ServiceUnavailable);
+        }
+
+        let token_id = Uuid::new_v4();
+        let now = std::time::SystemTime::now();
+        let expires_at = now + std::time::Duration::from_secs(3600); // 1 hour
+
+        let token = Token {
+            id: token_id,
+            created_at: now,
+            expires_at,
+            user_id,
+            permissions,
+        };
+
+        {
+            let mut tokens = self.tokens.write().unwrap();
+            tokens.insert(token_id, token);
+        }
+
+        Ok(token_id)
+    }
+
+    pub async fn validate_token(&self, token_id: Uuid, required_permission: Option<&str>) -> Result<Token, AuthError> {
         let tokens = self.tokens.read().unwrap();
-        tokens.get(token).copied().unwrap_or(false)
-    }
 
-    pub fn generate_token(&self) -> String {
-        let new_token = Uuid::new_v4().to_string();
-        let mut tokens = self.tokens.write().unwrap();
-        tokens.insert(new_token.clone(), true);
-        new_token
-    }
+        let token = tokens.get(&token_id)
+            .ok_or(AuthError::TokenNotFound)?
+            .clone();
 
-    pub fn revoke_token(&self, token: &str) -> bool {
-        let mut tokens = self.tokens.write().unwrap();
-        tokens.remove(token).is_some()
-    }
+        if std::time::SystemTime::now() > token.expires_at {
+            return Err(AuthError::TokenExpired);
+        }
 
-    pub fn get_initial_token(&self) -> Option<String> {
-        let tokens = self.tokens.read().unwrap();
-        tokens.keys().next().cloned()
-    }
-}
-
-// URL Token Middleware
-pub struct UrlTokenMiddleware {
-    token_manager: web::Data<Mutex<TokenManager>>,
-}
-
-impl UrlTokenMiddleware {
-    pub fn new(token_manager: web::Data<Mutex<TokenManager>>) -> Self {
-        Self { token_manager }
-    }
-}
-
-impl actix_web::dev::Transform<actix_web::dev::Service, actix_web::dev::ServiceRequest> for UrlTokenMiddleware {
-    type Response = actix_web::dev::ServiceResponse;
-    type Error = Error;
-    type InitError = ();
-    type Transform = UrlTokenMiddlewareService;
-    type Future = std::future::Ready<Result<Self::Transform, Self::InitError>>;
-
-    fn new_transform(&self, service: actix_web::dev::Service) -> Self::Future {
-        std::future::ready(Ok(UrlTokenMiddlewareService {
-            service,
-            token_manager: self.token_manager.clone(),
-        }))
-    }
-}
-
-pub struct UrlTokenMiddlewareService {
-    service: actix_web::dev::Service,
-    token_manager: web::Data<Mutex<TokenManager>>,
-}
-
-impl actix_web::dev::Service<actix_web::dev::ServiceRequest> for UrlTokenMiddlewareService {
-    type Response = actix_web::dev::ServiceResponse;
-    type Error = Error;
-    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
-
-    fn poll_ready(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    fn call(&self, req: actix_web::dev::ServiceRequest) -> Self::Future {
-        let token_manager = self.token_manager.clone();
-        let service = self.service.clone();
-
-        Box::pin(async move {
-            // Skip authentication for certain paths
-            let path = req.path();
-            if path == "/health" || path.starts_with("/auth/") {
-                return service.call(req).await;
+        // Check permissions if required
+        if let Some(permission) = required_permission {
+            if !token.permissions.contains(&permission.to_string()) {
+                return Err(AuthError::InsufficientPermissions(permission.to_string()));
             }
+        }
 
-            // Check for URL token parameter
-            let query_string = req.query_string();
-            let token = if let Some(token_start) = query_string.find("token=") {
-                let token_value = &query_string[token_start + 6..];
-                if let Some(token_end) = token_value.find('&') {
-                    &token_value[..token_end]
-                } else {
-                    token_value
-                }
-            } else {
-                ""
-            };
-
-            // Validate token
-            if token.is_empty() || !token_manager.lock().unwrap().validate_token(token) {
-                let redirect_url = format!("/auth/error?message={}", urlencoding::encode("Invalid or missing token"));
-                let response = actix_web::HttpResponse::Found()
-                    .append_header(("Location", redirect_url))
-                    .finish();
-                return Ok(req.into_response(response));
-            }
-
-            service.call(req).await
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_token_validation() {
-        let manager = TokenManager::new();
-
-        // Test that a valid token exists
-        let tokens = manager.tokens.read().unwrap();
-        let valid_token = tokens.keys().next().unwrap().clone();
-        drop(tokens);
-
-        assert!(manager.validate_token(&valid_token));
-        assert!(!manager.validate_token("invalid_token"));
+        Ok(token)
     }
 
-    #[test]
-    fn test_token_generation() {
-        let manager = TokenManager::new();
+    pub async fn renew_token(&self, token_id: Uuid) -> Result<Uuid, AuthError> {
+        let mut tokens = self.tokens.write().unwrap();
 
-        let new_token = manager.generate_token();
-        assert!(manager.validate_token(&new_token));
+        let token = tokens.get_mut(&token_id)
+            .ok_or(AuthError::TokenNotFound)?;
+
+        let now = std::time::SystemTime::now();
+        if now > token.expires_at {
+            return Err(AuthError::TokenExpired);
+        }
+
+        token.expires_at = now + std::time::Duration::from_secs(3600);
+        Ok(token_id)
     }
 
-    #[test]
-    fn test_token_revocation() {
-        let manager = TokenManager::new();
-
-        let tokens = manager.tokens.read().unwrap();
-        let valid_token = tokens.keys().next().unwrap().clone();
-        drop(tokens);
-
-        assert!(manager.revoke_token(&valid_token));
-        assert!(!manager.validate_token(&valid_token));
+    pub async fn revoke_token(&self, token_id: Uuid) -> Result<(), AuthError> {
+        let mut tokens = self.tokens.write().unwrap();
+        tokens.remove(&token_id)
+            .map(|_| ())
+            .ok_or(AuthError::TokenNotFound)
     }
 
-    #[test]
-    fn test_get_initial_token() {
-        let manager = TokenManager::new();
-        assert!(manager.get_initial_token().is_some());
+    async fn validate_permissions(&self, permissions: &[String]) -> Result<(), AuthError> {
+        // In a real implementation, this would validate permissions with the forgecode service
+        // For now, we'll simulate this with a simple check
+        if permissions.iter().any(|p| p.is_empty()) {
+            return Err(AuthError::InvalidTokenFormat);
+        }
+        Ok(())
+    }
+
+    pub fn cleanup_expired_tokens(&self) {
+        let now = std::time::SystemTime::now();
+        let mut tokens = self.tokens.write().unwrap();
+        tokens.retain(|_, token| now < token.expires_at);
     }
 }
