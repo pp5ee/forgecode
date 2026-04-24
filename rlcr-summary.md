@@ -42,3 +42,7 @@ To test the gateway:
 3. Generate a token and test the authentication flow
 4. Execute commands through the real-time terminal
 
+## BitLesson Delta
+
+Action: none
+
