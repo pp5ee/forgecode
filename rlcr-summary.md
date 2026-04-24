@@ -43,5 +43,5 @@ To test the gateway:
 4. Execute commands through the real-time terminal
 
 ## BitLesson Delta
-- none
+- Action: none
 
