@@ -161,11 +161,33 @@ pub async fn websocket_handler(
     forgecode_client: web::Data<ForgeCodeClient>,
     token_manager: web::Data<SecureTokenManager>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    // Extract and validate token
-    let token = match extract_token_from_extensions(&req) {
+    // Extract token from query string (for WebSocket connections)
+    let token_str = req
+        .query_string()
+        .split('&')
+        .find(|param| param.starts_with("token="))
+        .and_then(|param| param.split('=').nth(1))
+        .or_else(|| {
+            // Fallback to extensions (for HTTP upgrade requests processed by middleware)
+            extract_token_from_extensions(&req).map(|token| token.token.as_str())
+        });
+
+    let token_str = match token_str {
         Some(token) => token,
         None => {
             return Ok(HttpResponse::Unauthorized().body("Authentication required"));
+        }
+    };
+
+    // Validate token using token manager
+    let token = match token_manager.validate_token(token_str).await {
+        Ok(Some(token)) => token,
+        Ok(None) => {
+            return Ok(HttpResponse::Unauthorized().body("Invalid token"));
+        }
+        Err(e) => {
+            log::error!("Token validation error: {}", e);
+            return Ok(HttpResponse::InternalServerError().body("Authentication error"));
         }
     };
 
