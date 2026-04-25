@@ -1,133 +1,140 @@
-use thiserror::Error;
-use reqwest::Client;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use anyhow::{anyhow, Result};
+use forge_api::ForgeAPI;
+use forge_app::CommandOutput;
+use forge_domain::Environment;
+use forge_infra::ForgeCommandExecutorService;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
-#[derive(Debug, Error)]
-pub enum ForgeCodeError {
-    #[error("HTTP request failed: {0}")]
-    RequestFailed(String),
-    #[error("Service unavailable")]
-    ServiceUnavailable,
-    #[error("Invalid response format: {0}")]
-    InvalidResponse(String),
-}
-
-#[derive(Debug, Serialize)]
-pub struct ExecuteCommandRequest {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandRequest {
     pub command: String,
-    pub args: Vec<String>,
     pub working_dir: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ExecuteCommandResponse {
-    pub output: String,
-    pub success: bool,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandResponse {
+    pub stdout: String,
+    pub stderr: String,
     pub exit_code: Option<i32>,
+    pub success: bool,
 }
 
-#[derive(Clone)]
 pub struct ForgeCodeClient {
-    client: Client,
-    base_url: String,
+    executor: Arc<ForgeCommandExecutorService>,
+    api: Arc<dyn ForgeAPI>,
+    current_dir: Mutex<PathBuf>,
 }
 
 impl ForgeCodeClient {
-    pub fn new(base_url: String) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to build HTTP client");
+    pub fn new(api: Arc<dyn ForgeAPI>) -> Self {
+        let env = Environment::new();
+        let executor = Arc::new(ForgeCommandExecutorService::new(env.clone(), Arc::new(forge_infra::console::StdConsoleWriter::default())));
 
         Self {
-            client,
-            base_url,
+            executor,
+            api,
+            current_dir: Mutex::new(PathBuf::from(".")),
         }
     }
 
-    pub async fn execute_command(&self, command: &str, args: &[String]) -> Result<String, ForgeCodeError> {
-        let url = format!("{}/api/execute-command", self.base_url);
-
-        let request = ExecuteCommandRequest {
-            command: command.to_string(),
-            args: args.to_vec(),
-            working_dir: None,
+    pub async fn execute_command(&self, request: CommandRequest) -> Result<CommandResponse> {
+        let working_dir = match request.working_dir {
+            Some(dir) => PathBuf::from(dir),
+            None => {
+                let current_dir = self.current_dir.lock().await;
+                current_dir.clone()
+            }
         };
 
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| ForgeCodeError::RequestFailed(e.to_string()))?;
+        // Execute the command using the forgecode infrastructure
+        let output = self.api.execute_shell_command(&request.command, working_dir.clone()).await?;
 
-        if !response.status().is_success() {
-            return Err(ForgeCodeError::ServiceUnavailable);
-        }
-
-        let response_data: ExecuteCommandResponse = response
-            .json()
-            .await
-            .map_err(|e| ForgeCodeError::InvalidResponse(e.to_string()))?;
-
-        Ok(response_data.output)
+        Ok(CommandResponse {
+            stdout: output.stdout,
+            stderr: output.stderr,
+            exit_code: output.exit_code,
+            success: output.success(),
+        })
     }
 
-    pub async fn health_check(&self) -> Result<bool, ForgeCodeError> {
-        let url = format!("{}/health", self.base_url);
+    pub async fn execute_command_raw(&self, command: &str) -> Result<std::process::ExitStatus> {
+        let working_dir = {
+            let current_dir = self.current_dir.lock().await;
+            current_dir.clone()
+        };
 
-        match self.client.get(&url).send().await {
-            Ok(response) => Ok(response.status().is_success()),
-            Err(_) => Ok(false),
-        }
+        self.api.execute_shell_command_raw(command).await
     }
 
-    // Additional methods for forgecode integration
-    pub async fn get_available_commands(&self) -> Result<Vec<String>, ForgeCodeError> {
-        let url = format!("{}/api/commands", self.base_url);
+    pub async fn list_files(&self, path: Option<String>) -> Result<Vec<String>> {
+        let target_path = match path {
+            Some(dir) => PathBuf::from(dir),
+            None => {
+                let current_dir = self.current_dir.lock().await;
+                current_dir.clone()
+            }
+        };
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| ForgeCodeError::RequestFailed(e.to_string()))?;
+        // Use the forgecode API to discover files
+        let files = self.api.discover().await?;
 
-        if !response.status().is_success() {
-            return Err(ForgeCodeError::ServiceUnavailable);
-        }
+        // Filter files that are in the target directory
+        let filtered_files: Vec<String> = files
+            .into_iter()
+            .filter_map(|file| {
+                let file_path = PathBuf::from(&file.path);
+                if file_path.parent() == Some(&target_path) {
+                    Some(file.name)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-        let commands: Vec<String> = response
-            .json()
-            .await
-            .map_err(|e| ForgeCodeError::InvalidResponse(e.to_string()))?;
-
-        Ok(commands)
+        Ok(filtered_files)
     }
 
-    pub async fn chat(&self, message: &str) -> Result<String, ForgeCodeError> {
-        let url = format!("{}/api/chat", self.base_url);
+    pub async fn change_directory(&self, path: String) -> Result<()> {
+        let new_path = PathBuf::from(&path);
 
-        let request = serde_json::json!({
-            "message": message
-        });
-
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| ForgeCodeError::RequestFailed(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(ForgeCodeError::ServiceUnavailable);
+        // Validate that the path exists and is a directory
+        if !new_path.exists() {
+            return Err(anyhow!("Directory does not exist: {}", path));
         }
 
-        let response_data: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ForgeCodeError::InvalidResponse(e.to_string()))?;
+        if !new_path.is_dir() {
+            return Err(anyhow!("Path is not a directory: {}", path));
+        }
 
-        Ok(response_data["response"].as_str().unwrap_or("No response").to_string())
+        let mut current_dir = self.current_dir.lock().await;
+        *current_dir = new_path;
+
+        Ok(())
+    }
+
+    pub async fn get_current_directory(&self) -> Result<String> {
+        let current_dir = self.current_dir.lock().await;
+        Ok(current_dir.to_string_lossy().to_string())
+    }
+
+    pub async fn get_tools(&self) -> Result<forge_app::dto::ToolsOverview> {
+        self.api.get_tools().await
+    }
+
+    pub async fn get_models(&self) -> Result<Vec<forge_api::Model>> {
+        self.api.get_models().await
+    }
+
+    pub async fn chat(&self, request: forge_api::ChatRequest) -> Result<forge_stream::MpscStream<Result<forge_api::ChatResponse>>> {
+        self.api.chat(request).await
+    }
+
+    pub async fn commit(&self, preview: bool, max_diff_size: Option<usize>, diff: Option<String>, additional_context: Option<String>)
+        -> Result<forge_app::CommitResult> {
+        self.api.commit(preview, max_diff_size, diff, additional_context).await
     }
 }

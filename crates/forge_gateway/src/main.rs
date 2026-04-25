@@ -1,64 +1,45 @@
-use actix_web::{web, App, HttpServer, middleware::Logger};
-use actix_web_httpauth::middleware::HttpAuthentication;
-use std::env;
+use std::sync::Arc;
 
-mod handlers;
-mod auth;
-mod forgecode_client;
-mod middleware;
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use forge_api::ForgeAPI;
+use forge_gateway::handlers::{
+    auth_handler, command_execute_handler, command_list_handler, file_list_handler,
+    token_validate_handler,
+};
+use forge_gateway::server::Server;
+use forge_gateway::ForgeCodeClient;
+use forge_gateway::WebSocketHandler;
+use tokio::sync::Mutex;
 
-use crate::auth::TokenManager;
-use crate::forgecode_client::ForgeCodeClient;
-use crate::middleware::url_token_auth;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    env_logger::init();
+    // Initialize the forgecode API
+    let api = Arc::new(forge_api::ForgeAPI::new()?);
 
-    // Get configuration from environment variables
-    let forgecode_base_url = env::var("FORGECODE_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:8081".to_string());
+    // Initialize the forgecode client with the actual API
+    let forge_client = Arc::new(ForgeCodeClient::new(api));
 
-    let gateway_port = env::var("GATEWAY_PORT")
-        .unwrap_or_else(|_| "8080".to_string())
-        .parse::<u16>()
-        .expect("Invalid GATEWAY_PORT");
+    // Initialize WebSocket handler
+    let ws_handler = Arc::new(WebSocketHandler::new(forge_client.clone()));
 
-    println!("Starting forge_gateway on port {}", gateway_port);
-    println!("Connecting to forgecode service at: {}", forgecode_base_url);
+    // Build our application with a route
+    let app = Router::new()
+        .route("/auth", get(auth_handler))
+        .route("/validate", get(token_validate_handler))
+        .route("/files", get(file_list_handler))
+        .route("/command/execute", post(command_execute_handler))
+        .route("/command/list", get(command_list_handler))
+        .route("/ws", get(WebSocketHandler::handle_websocket))
+        .with_state(ws_handler.clone());
 
-    // Initialize components
-    let token_manager = TokenManager::new();
-    let forgecode_client = ForgeCodeClient::new(forgecode_base_url);
+    // Start server
+    let server = Server::new("0.0.0.0:8080".parse().unwrap());
+    server.run(app).await?;
 
-    // Check forgecode service health
-    match forgecode_client.health_check().await {
-        Ok(true) => println!("Forgecode service is healthy"),
-        Ok(false) => println!("Warning: Forgecode service is not responding"),
-        Err(e) => println!("Warning: Cannot connect to forgecode service: {}", e),
-    }
-
-    HttpServer::new(move || {
-        let auth = HttpAuthentication::with_fn(url_token_auth);
-
-        App::new()
-            .wrap(Logger::default())
-            .app_data(web::Data::new(token_manager.clone()))
-            .app_data(web::Data::new(forgecode_client.clone()))
-            .service(
-                web::scope("/api")
-                    .service(handlers::generate_token)
-                    .service(handlers::renew_token)
-                    .wrap(auth.clone())
-                    .service(handlers::execute_command)
-            )
-            .service(
-                actix_files::Files::new("/", "static")
-                    .index_file("index.html")
-                    .use_last_modified(true)
-            )
-    })
-    .bind(("0.0.0.0", gateway_port))?
-    .run()
-    .await
+    Ok(())
 }
